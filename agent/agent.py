@@ -1853,6 +1853,20 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
         _force_propose = False
         _force_propose_retries = 0
         _MAX_FORCE_PROPOSE_RETRIES = 3
+        
+        # === CUSTOM MODIFICATION START - 循环检测机制 ===
+        _tool_call_history: list[tuple[str, str]] = []  # (tool_name, args_hash)
+        _MAX_IDENTICAL_CALLS = 10  # 最多允许相同的工具调用重复次数
+        _MAX_METADATA_CALLS = 10  # 元数据查询允许的重复次数（探索性查询）
+        _MAX_READ_RESULT_CALLS = 10  # read_tool_result允许的重复次数（读取artifact）
+        _recent_tool_window = 15  # 在最近N次调用中检测循环
+        
+        # 新增：SQL错误检测
+        _consecutive_sql_errors = 0  # 连续SQL错误计数
+        _MAX_CONSECUTIVE_SQL_ERRORS = 10  # 最多允许10次连续SQL错误
+        _last_sql_error = None  # 上次错误的SQL
+        # === CUSTOM MODIFICATION END ===
+        
         for _iteration in range(self.MAX_ITERATIONS):
             # ── Hard exit guards ──────────────────────────────────────────────
             # _run_start is reset after every job completes (see _run_job), so
@@ -1870,6 +1884,17 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
                 yield {"type": "text", "content": "连续工具调用失败，已终止。请检查数据源连接或简化查询。"}
                 yield {"type": "done"}
                 return
+            
+            # === CUSTOM MODIFICATION START - 检查连续SQL错误 ===
+            if _consecutive_sql_errors >= _MAX_CONSECUTIVE_SQL_ERRORS:
+                log.error("[run] %d consecutive identical SQL errors, aborting", _consecutive_sql_errors)
+                yield {
+                    "type": "text", 
+                    "content": f"检测到连续{_consecutive_sql_errors}次相同的SQL错误，已强制停止。请检查数据源配置和SQL语法。"
+                }
+                yield {"type": "done"}
+                return
+            # === CUSTOM MODIFICATION END ===
 
             if _force_propose:
                 if command in ("ppt", "ppt_revise"):
@@ -2686,6 +2711,152 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
                     if hook_msg:
                         messages.append(hook_msg)
                     continue
+
+                # === CUSTOM MODIFICATION START - 循环检测：检查工具调用是否重复 ===
+                import hashlib
+                import json
+                import re
+                
+                # 先检查是否有循环（在执行前检测）
+                _loop_detected = False
+                _loop_tool_name = ""
+                _is_metadata_loop = False
+                
+                for tc, name, args in _parsed_tools:
+                    # === CUSTOM MODIFICATION - 修复read_tool_result循环检测 ===
+                    # workspace_status 是轻量级工具，可以跳过
+                    if name == "workspace_status":
+                        continue
+                    
+                    # read_tool_result 需要检测，但使用宽松阈值
+                    # 允许读取不同artifact，但不允许反复读取同一个artifact
+                    is_read_result = (name == "read_tool_result")
+                    # === CUSTOM MODIFICATION END ===
+                    
+                    # 计算工具调用的指纹（工具名 + 主要参数）
+                    key_args = {}
+                    is_metadata_query = False
+                    
+                    if name == "query_data":
+                        sql = args.get("sql", "")
+                        # 检查是否是元数据查询
+                        sql_upper = sql.upper()
+                        is_metadata_query = any([
+                            "SQLITE_MASTER" in sql_upper,
+                            "INFORMATION_SCHEMA" in sql_upper,
+                            "SHOW TABLES" in sql_upper,
+                            "SHOW COLUMNS" in sql_upper,
+                        ])
+                        
+                        # 标准化 SQL
+                        sql_normalized = re.sub(r'--.*', '', sql)
+                        sql_normalized = re.sub(r'/\*.*?\*/', '', sql_normalized, flags=re.DOTALL)
+                        sql_normalized = " ".join(sql_normalized.upper().split())
+                        sql_normalized = re.sub(r'\s*LIMIT\s+\d+\s*', '', sql_normalized, flags=re.IGNORECASE)
+                        key_args = {"sql": sql_normalized[:300]}
+                    elif name == "read_tool_result":
+                        # === CUSTOM MODIFICATION - 追踪artifact_id避免反复读取同一个结果 ===
+                        key_args = {"artifact_id": args.get("artifact_id", "")}
+                    elif name == "get_table_detail":
+                        key_args = {"table": args.get("table_name", "")}
+                    elif name == "get_schema":
+                        key_args = {"tool": "get_schema"}
+                    else:
+                        key_args = args
+                    
+                    args_str = json.dumps(key_args, sort_keys=True, ensure_ascii=False)
+                    args_hash = hashlib.md5(args_str.encode()).hexdigest()[:8]
+                    call_signature = (name, args_hash)
+                    
+                    # 检查最近的调用历史
+                    recent_calls = _tool_call_history[-_recent_tool_window:]
+                    identical_count = recent_calls.count(call_signature)
+                    
+                    # === DEBUG: 输出循环检测信息 ===
+                    if identical_count >= 3:  # 当重复3次以上时输出警告
+                        log.warning(
+                            "[loop-detect] WARNING: %d/%d identical calls to '%s' (hash=%s)",
+                            identical_count, threshold if 'threshold' in locals() else '?',
+                            name, args_hash
+                        )
+                    # === DEBUG END ===
+                    
+                    # 根据查询类型使用不同的阈值
+                    # === CUSTOM MODIFICATION - read_tool_result使用可配置的阈值 ===
+                    if is_read_result:
+                        # read_tool_result: 读取同一个artifact的重复次数限制
+                        threshold = _MAX_READ_RESULT_CALLS
+                    elif is_metadata_query:
+                        # 元数据查询允许更多次
+                        threshold = _MAX_METADATA_CALLS
+                    else:
+                        # 普通查询
+                        threshold = _MAX_IDENTICAL_CALLS
+                    # === CUSTOM MODIFICATION END ===
+                    
+                    if identical_count >= threshold:
+                        _loop_detected = True
+                        _loop_tool_name = name
+                        _is_metadata_loop = is_metadata_query
+                        log.warning(
+                            "[loop-detect] detected %d identical calls to '%s' (hash=%s, metadata=%s) in recent %d calls",
+                            identical_count, name, args_hash, is_metadata_query, len(recent_calls)
+                        )
+                        log.warning("[loop-detect] recent history: %s", 
+                                   [f"{n}:{h}" for n, h in recent_calls[-8:]])
+                        break
+                
+                if _loop_detected:
+                    # 发现循环，强制停止并给出提示
+                    # === CUSTOM MODIFICATION - 添加read_tool_result循环提示 ===
+                    if is_read_result:
+                        loop_message = (
+                            "⚠️ 检测到反复读取同一结果的循环\n\n"
+                            f"Agent 已尝试读取同一个 artifact 结果 {_MAX_READ_RESULT_CALLS} 次但未取得进展。\n\n"
+                            "**可能的原因：**\n"
+                            "1. 查询结果为空或格式不符合预期\n"
+                            "2. Agent 对结果的解析逻辑有误\n"
+                            "3. 缺少必要的上下文信息\n\n"
+                            "**建议：**\n"
+                            "• 换一种方式提问或简化问题\n"
+                            "• 检查之前的查询是否返回了有效数据\n"
+                            "• 尝试先查看数据表结构"
+                        )
+                    elif _is_metadata_loop:
+                        loop_message = (
+                            "⚠️ 检测到重复的表结构查询循环\n\n"
+                            f"Agent 已尝试查询数据库表列表 {_MAX_METADATA_CALLS} 次但未找到需要的表。\n\n"
+                            "**可能的原因：**\n"
+                            "1. 智能表选择没有选中正确的表\n"
+                            "2. 需要的表在其他数据库中（OA/HR/WF）\n"
+                            "3. 表名与预期不符\n\n"
+                            "**建议：**\n"
+                            "• 明确指定数据库名称（如：在 HR 数据库中查询...）\n"
+                            "• 简化问题，先确认表是否存在\n"
+                            "• 检查配置文件中的 table_mapping 是否正确"
+                        )
+                    else:
+                        loop_message = (
+                            "⚠️ 检测到重复的工具调用循环\n\n"
+                            f"Agent 已尝试相同的 `{_loop_tool_name}` 操作 {_MAX_IDENTICAL_CALLS} 次但未取得进展。\n\n"
+                            "**可能的原因：**\n"
+                            "1. 数据表结构不符合预期（字段不存在或类型不匹配）\n"
+                            "2. SQL 查询结果为空或格式不符合预期\n"
+                            "3. 多个表之间的关联关系不正确\n"
+                            "4. 缺少必要的数据或权限\n\n"
+                            "**建议：**\n"
+                            "• 换一种方式提问或简化问题\n"
+                            "• 先查看表结构确认字段存在性\n"
+                            "• 检查之前的查询结果是否符合预期\n"
+                            "• 如果是关联查询，确认表之间的关系字段是否正确"
+                        )
+                    
+                    yield {"type": "text", "content": loop_message}
+                    yield {"type": "agent_activity", "message": "已终止循环调用"}
+                    log.error("[loop-detect] terminating conversation due to loop detection")
+                    yield {"type": "done"}
+                    return
+                # === CUSTOM MODIFICATION END ===
 
                 for tc, name, args in _parsed_tools:
                     _args_preview = {k: str(v)[:80] for k, v in args.items() if k != "slides"}
@@ -4280,6 +4451,96 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
                     }
                     if envelope.ok:
                         _successful_tool_names.add(name)
+                        
+                        # === CUSTOM MODIFICATION START - 连续SQL错误检测 ===
+                        # 检查是否是SQL错误（即使envelope.ok=True）
+                        is_sql_error = False
+                        if name == "query_data":
+                            result_str = str(envelope.data)
+                            if "SQL Error" in result_str or "Execution failed" in result_str:
+                                is_sql_error = True
+                                sql = args.get("sql", "")
+                                # 标准化SQL用于比较
+                                sql_normalized = re.sub(r'--.*', '', sql)
+                                sql_normalized = re.sub(r'/\*.*?\*/', '', sql_normalized, flags=re.DOTALL)
+                                sql_normalized = " ".join(sql_normalized.upper().split())
+                                
+                                # 检查是否与上次错误相同
+                                if _last_sql_error == sql_normalized:
+                                    _consecutive_sql_errors += 1
+                                    log.warning(
+                                        "[sql-error-detect] consecutive SQL error #%d (max=%d): %s",
+                                        _consecutive_sql_errors, _MAX_CONSECUTIVE_SQL_ERRORS, sql[:100]
+                                    )
+                                else:
+                                    _consecutive_sql_errors = 1
+                                    _last_sql_error = sql_normalized
+                                    log.info("[sql-error-detect] new SQL error detected: %s", sql[:100])
+                                
+                                # 如果达到阈值，强制停止
+                                if _consecutive_sql_errors >= _MAX_CONSECUTIVE_SQL_ERRORS:
+                                    log.error(
+                                        "[sql-error-detect] %d consecutive identical SQL errors, forcing stop",
+                                        _consecutive_sql_errors
+                                    )
+                                    yield {
+                                        "type": "text",
+                                        "content": f"检测到连续{_consecutive_sql_errors}次相同的SQL错误，已强制停止。\n\n"
+                                                   f"错误的SQL: {sql[:200]}\n\n"
+                                                   f"可能的原因：\n"
+                                                   f"1. 表或字段不存在\n"
+                                                   f"2. 数据源配置错误\n"
+                                                   f"3. SQL语法错误\n\n"
+                                                   f"请检查数据源配置和表映射设置。"
+                                    }
+                                    yield {"type": "done"}
+                                    return
+                            else:
+                                # SQL执行成功，重置错误计数
+                                if _consecutive_sql_errors > 0:
+                                    log.info("[sql-error-detect] SQL execution successful, resetting error count")
+                                _consecutive_sql_errors = 0
+                                _last_sql_error = None
+                        # === CUSTOM MODIFICATION END ===
+                        
+                        # === CUSTOM MODIFICATION START - 循环检测：记录成功的工具调用 ===
+                        # 只记录成功的调用（失败的不算循环）
+                        import hashlib
+                        import json
+                        import re
+                        
+                        # 跳过某些不应该计入循环的工具
+                        # workspace_status: 工作区状态查询（轻量级，跳过）
+                        # read_tool_result: 需要记录，但使用严格阈值（见前面检测代码）
+                        if name not in {"workspace_status"}:
+                            key_args = {}
+                            if name == "query_data":
+                                sql = args.get("sql", "")
+                                # 标准化 SQL（所有查询都记录，包括元数据查询）
+                                sql_normalized = re.sub(r'--.*', '', sql)
+                                sql_normalized = re.sub(r'/\*.*?\*/', '', sql_normalized, flags=re.DOTALL)
+                                sql_normalized = " ".join(sql_normalized.upper().split())
+                                sql_normalized = re.sub(r'\s*LIMIT\s+\d+\s*', '', sql_normalized, flags=re.IGNORECASE)
+                                key_args = {"sql": sql_normalized[:300]}
+                            elif name == "read_tool_result":
+                                # === CUSTOM MODIFICATION - 记录artifact_id避免重复读取 ===
+                                key_args = {"artifact_id": args.get("artifact_id", "")}
+                            elif name == "get_table_detail":
+                                key_args = {"table": args.get("table_name", "")}
+                            elif name == "get_schema":
+                                # get_schema 需要计入（防止重复调用）
+                                key_args = {"tool": "get_schema"}
+                            else:
+                                key_args = args
+                            
+                            if key_args:  # 只有非空 key_args 才记录
+                                args_str = json.dumps(key_args, sort_keys=True, ensure_ascii=False)
+                                args_hash = hashlib.md5(args_str.encode()).hexdigest()[:8]
+                                call_signature = (name, args_hash)
+                                # 只有非SQL错误的调用才计入历史（避免错误SQL污染循环检测）
+                                if not is_sql_error:
+                                    _tool_call_history.append(call_signature)
+                        # === CUSTOM MODIFICATION END ===
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tc.id,
