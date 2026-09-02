@@ -31,6 +31,120 @@ log = logging.getLogger(__name__)
 bp = Blueprint("chat", __name__)
 
 
+# === CUSTOM MODIFICATION START - 默认数据源自动连接（支持多数据源） ===
+def _auto_connect_default_datasource(session_id: str):
+    """在新会话创建时自动连接配置的默认数据源（支持多个）"""
+    import json
+    from pathlib import Path
+    
+    # 读取配置文件
+    config_file = Path(__file__).parent.parent / "config" / "default_datasource.json"
+    if not config_file.exists():
+        log.debug("[auto-connect] config file not found: %s", config_file)
+        return
+    
+    try:
+        with open(config_file, "r", encoding="utf-8") as f:
+            config = json.load(f)
+        
+        # 检查是否启用
+        if not config.get("enabled", False):
+            log.debug("[auto-connect] disabled in config")
+            return
+        
+        sess = session_manager.get(session_id)
+        if not sess:
+            log.warning("[auto-connect] session not found: %s", session_id)
+            return
+        
+        # 支持单个数据源（向后兼容）
+        if "connection_string" in config:
+            _connect_single_datasource(sess, session_id, config)
+        
+        # 支持多个数据源
+        datasources = config.get("datasources", [])
+        if datasources:
+            success_count = 0
+            for idx, ds_config in enumerate(datasources):
+                # 检查是否启用该数据源
+                if not ds_config.get("enabled", True):
+                    log.debug("[auto-connect] datasource #%d disabled, skip", idx)
+                    continue
+                
+                try:
+                    _connect_single_datasource(sess, session_id, ds_config)
+                    success_count += 1
+                except Exception as exc:
+                    log.error("[auto-connect] datasource #%d FAILED: %s", idx, exc)
+            
+            log.info("[auto-connect] connected %d/%d datasources for sid=%s", 
+                     success_count, len(datasources), session_id)
+            
+    except Exception as exc:
+        log.error("[auto-connect] FAILED  sid=%s: %s", session_id, exc)
+        raise
+
+
+def _connect_single_datasource(sess, session_id: str, config: dict):
+    """连接单个数据源的辅助函数"""
+    from data.connector import SQLDataSource
+    
+    conn_type = config.get("type", "sql")
+    conn_str = config.get("connection_string", "").strip()
+    display_name = config.get("display_name", "默认数据源")
+    
+    if not conn_str:
+        log.warning("[auto-connect] connection_string is empty for '%s'", display_name)
+        return
+    
+    # 连接数据源
+    if conn_type == "sql":
+        source = SQLDataSource(conn_str, display_name)
+        
+        # === CUSTOM MODIFICATION START - 智能表选择配置 ===
+        # 保存配置到数据源对象
+        auto_select = config.get("auto_select_tables", False)
+        select_all = config.get("select_all_tables", False)
+        max_tables = config.get("max_tables", 20)
+        table_mapping = config.get("table_mapping", {})
+        default_tables = config.get("default_tables", [])
+        
+        if auto_select:
+            source._auto_select_enabled = True
+            source._select_all_tables = select_all
+            source._max_tables = max_tables
+            source._max_tables_limit = max_tables  # 设置表数量限制
+            source._table_mapping = table_mapping
+            source._default_tables = default_tables
+            
+            log.debug("[auto-connect] enabled auto table selection for '%s', select_all=%s, max=%d",
+                     display_name, select_all, max_tables)
+            
+            # 如果启用了"选择所有表"，立即设置
+            if select_all:
+                try:
+                    all_tables = source._all_table_names()
+                    # 限制表数量
+                    tables_to_select = all_tables[:max_tables]
+                    if tables_to_select:
+                        source.set_analysis_tables(tables_to_select)
+                        log.info("[auto-connect] selected all tables for '%s': %d tables (max: %d)",
+                                display_name, len(tables_to_select), max_tables)
+                    else:
+                        log.warning("[auto-connect] no tables found in '%s'", display_name)
+                except Exception as exc:
+                    log.warning("[auto-connect] failed to select all tables for '%s': %s",
+                               display_name, exc)
+        # === CUSTOM MODIFICATION END ===
+        
+        source_id = sess.add_source(source)
+        log.info("[auto-connect] SUCCESS  sid=%s  source='%s'  source_id=%s", 
+                 session_id, display_name, source_id)
+    else:
+        log.warning("[auto-connect] unsupported type: %s for '%s'", conn_type, display_name)
+# === CUSTOM MODIFICATION END ===
+
+
 _PROMPT_SUGGESTION_DIRECTIVE = """You are a prompt suggestion engine.
 Predict the single next message this user is most likely to type after reading the assistant's latest answer.
 Return only the message text that should be prefilled in the chat input.
@@ -421,6 +535,35 @@ def _apply_sql_analysis_context(sess, data_context: dict | None) -> list[dict]:
         if entry["id"] in selected_by_source:
             src.set_analysis_tables(selected_by_source[entry["id"]])
             changed = True
+        
+        # === CUSTOM MODIFICATION START - 智能表选择：跳过已启用自动选择的数据源 ===
+        # 如果数据源启用了智能表选择，不要求用户手动勾选
+        auto_select_enabled = getattr(src, "_auto_select_enabled", False)
+        
+        # 兜底逻辑：如果是旧会话（没有 _auto_select_enabled 属性），尝试从配置文件读取
+        if not auto_select_enabled and not hasattr(src, "_auto_select_enabled"):
+            log.debug("[auto-table-select] old session detected for '%s', trying to load config",
+                     getattr(src, "name", "SQL"))
+            auto_select_enabled = _try_load_auto_select_config(src)
+        
+        if auto_select_enabled:
+            log.debug("[auto-table-select] source '%s' has auto_select enabled",
+                     getattr(src, "name", "SQL"))
+            
+            # === FIX: 智能选择已处理所有数据源，跳过默认表填充 ===
+            # 智能选择会：
+            # 1. 为最佳匹配的数据源设置表
+            # 2. 清空其他数据源的表
+            # 因此，这里不需要再填充默认表
+            current_tables = src.get_analysis_tables()
+            log.info("[auto-table-select] source '%s' current tables: %s (smart-select already handled)",
+                    getattr(src, "name", "SQL"), current_tables or "[]")
+            continue  # 跳过，智能选择已处理
+        # === CUSTOM MODIFICATION END ===
+        
+        # 如果数据源没有启用auto_select，则需要用户手动选择表
+        # 这种情况下，如果没有表，会被加入 missing 列表
+        
         if not src.get_analysis_tables():
             missing.append({"source_id": entry["id"], "source_name": getattr(src, "name", "SQL 数据库")})
     if changed:
@@ -428,6 +571,309 @@ def _apply_sql_analysis_context(sess, data_context: dict | None) -> list[dict]:
         if hasattr(sess, "_invalidate_merged_source"):
             sess._invalidate_merged_source()
     return missing
+
+
+def _try_load_auto_select_config(source) -> bool:
+    """
+    为旧会话的数据源尝试加载智能表选择配置。
+    
+    === CUSTOM MODIFICATION - 兼容旧会话 ===
+    """
+    from pathlib import Path
+    import json
+    
+    try:
+        # 读取配置文件
+        config_file = Path(__file__).parent.parent / "config" / "default_datasource.json"
+        if not config_file.exists():
+            return False
+        
+        with open(config_file, "r", encoding="utf-8") as f:
+            config = json.load(f)
+        
+        if not config.get("enabled"):
+            return False
+        
+        # 获取当前数据源的连接信息
+        try:
+            current_url = source._engine.url
+            current_host = str(current_url.host or "")
+            current_database = str(current_url.database or "")
+        except Exception:
+            return False
+        
+        # 检查多数据源配置
+        datasources = config.get("datasources", [])
+        for ds in datasources:
+            if not ds.get("enabled", True):
+                continue
+            
+            conn_str = ds.get("connection_string", "")
+            # 简单匹配：检查主机和数据库名是否一致
+            if current_host in conn_str and current_database in conn_str:
+                # 找到匹配的配置
+                auto_select = ds.get("auto_select_tables", False)
+                if auto_select:
+                    # 设置配置到数据源
+                    source._auto_select_enabled = True
+                    source._select_all_tables = ds.get("select_all_tables", False)
+                    source._max_tables = ds.get("max_tables", 20)
+                    source._table_mapping = ds.get("table_mapping", {})
+                    source._default_tables = ds.get("default_tables", [])
+                    
+                    log.info("[auto-table-select] loaded config for old session source '%s', select_all=%s",
+                            getattr(source, "name", "SQL"), source._select_all_tables)
+                    
+                    # 如果启用了"选择所有表"，立即设置
+                    if source._select_all_tables:
+                        try:
+                            all_tables = source._all_table_names()
+                            tables_to_select = all_tables[:source._max_tables]
+                            if tables_to_select:
+                                source.set_analysis_tables(tables_to_select)
+                                log.info("[auto-table-select] selected all tables for old session '%s': %d tables",
+                                        getattr(source, "name", "SQL"), len(tables_to_select))
+                        except Exception as exc:
+                            log.warning("[auto-table-select] failed to select all tables: %s", exc)
+                    
+                    return True
+        
+        return False
+        
+    except Exception as exc:
+        log.debug("[auto-table-select] failed to load config for old session: %s", exc)
+        return False
+
+
+def _smart_select_tables_from_question(sess, question: str):
+    """
+    根据用户问题智能选择相关的表。
+    
+    === CUSTOM MODIFICATION - 多数据源智能路由机制 ===
+    改进逻辑：
+    1. 遍历所有数据源，计算每个数据源的匹配分数
+    2. 为所有匹配的数据源设置表（支持跨库查询）
+    """
+    import re
+    from data.sources.sql import SQLDataSource
+    
+    log.info("=" * 60)
+    log.info("[SMART-SELECT] Starting smart table selection")
+    log.info("[SMART-SELECT] Question: %s", question[:200])
+    log.info("=" * 60)
+    
+    changed = False
+    
+    # 诊断：检查有多少个数据源
+    all_entries = list(sess._active_entries()) if hasattr(sess, "_active_entries") else []
+    sql_sources = [e for e in all_entries if isinstance(e.get("source"), SQLDataSource)]
+    log.info("[SMART-SELECT] Total entries: %d, SQL sources: %d", len(all_entries), len(sql_sources))
+    
+    # === 新增：收集所有数据源的匹配结果 ===
+    candidates = []
+    
+    for entry in all_entries:
+        src = entry.get("source")
+        if not isinstance(src, SQLDataSource):
+            continue
+        
+        source_name = getattr(src, "name", "SQL")
+        conn_str = getattr(src, "conn_str", "")
+        
+        # 诊断：输出数据源详情
+        log.info("[SMART-SELECT] Checking source: '%s', conn_str: %s", source_name, conn_str[:50] if conn_str else "N/A")
+        
+        # === 新增：确保数据源已加载配置 ===
+        # 如果数据源没有 _auto_select_enabled 属性，尝试加载配置
+        if not hasattr(src, "_auto_select_enabled"):
+            log.info("[SMART-SELECT] Source '%s' missing config, trying to load...", source_name)
+            _try_load_auto_select_config(src)
+        # ===结束===
+        
+        # 检查是否启用了智能表选择
+        auto_select_enabled = getattr(src, "_auto_select_enabled", False)
+        table_mapping = getattr(src, "_table_mapping", {})
+        default_tables = getattr(src, "_default_tables", [])
+        
+        log.info("[SMART-SELECT] Source '%s': auto_select=%s, table_mapping_rules=%d, default_tables=%d", 
+                source_name, auto_select_enabled, len(table_mapping), len(default_tables))
+        
+        if not auto_select_enabled:
+            log.info("[SMART-SELECT] Source '%s': auto_select DISABLED, skipping", source_name)
+            continue
+        
+        log.info("[SMART-SELECT] Source '%s': auto_select ENABLED, processing...", source_name)
+        
+        # 如果没有映射配置，使用默认表（但不参与竞争）
+        if not table_mapping:
+            log.debug("[SMART-SELECT] Source '%s': no table_mapping, will only use defaults if no other match", source_name)
+            if default_tables:
+                # 记录为备选方案（分数为 0）
+                candidates.append({
+                    "source": src,
+                    "source_name": source_name,
+                    "score": 0,
+                    "matched_patterns": [],
+                    "matched_tables": set(default_tables),
+                    "is_default": True
+                })
+            continue
+        
+        # 根据问题匹配表
+        matched_tables = set()
+        matched_patterns = []
+        
+        try:
+            all_tables = src._all_table_names()
+        except Exception as exc:
+            log.warning("[SMART-SELECT] Failed to get tables for '%s': %s", source_name, exc)
+            continue
+        
+        for keywords_pattern, table_patterns in table_mapping.items():
+            try:
+                # 使用正则表达式匹配关键词
+                if re.search(keywords_pattern, question, re.IGNORECASE):
+                    matched_patterns.append(keywords_pattern)
+                    
+                    # 处理每个表模式
+                    for table_pattern in table_patterns:
+                        # 如果是前缀匹配（以 _ 结尾），匹配所有该前缀的表
+                        if table_pattern.endswith('_'):
+                            prefix_tables = [t for t in all_tables if t.startswith(table_pattern)]
+                            if prefix_tables:
+                                matched_tables.update(prefix_tables)
+                                log.debug("[SMART-SELECT] '%s': prefix pattern '%s' matched: %s",
+                                         source_name, table_pattern, prefix_tables[:5])
+                        else:
+                            # 精确表名
+                            matched_tables.add(table_pattern)
+                    
+                    log.debug("[SMART-SELECT] '%s': matched pattern '%s' -> tables: %s",
+                             source_name, keywords_pattern, table_patterns)
+            except re.error as exc:
+                log.warning("[SMART-SELECT] '%s': invalid regex pattern '%s': %s",
+                           source_name, keywords_pattern, exc)
+        
+        # 计算匹配分数
+        if matched_patterns:
+            # 分数 = 匹配到的关键词模式数量
+            score = len(matched_patterns)
+            candidates.append({
+                "source": src,
+                "source_name": source_name,
+                "score": score,
+                "matched_patterns": matched_patterns,
+                "matched_tables": matched_tables,
+                "is_default": False
+            })
+            log.info("[SMART-SELECT] '%s': matched %d patterns, score=%d, tables=%d",
+                    source_name, len(matched_patterns), score, len(matched_tables))
+    
+    # === 选择最佳匹配的数据源 ===
+    if not candidates:
+        log.info("[SMART-SELECT] No candidates found, no tables will be set")
+        return
+    
+    # 按分数排序，选择最高分
+    candidates.sort(key=lambda x: (x["score"], len(x["matched_tables"])), reverse=True)
+    
+    log.info("[SMART-SELECT] Candidates ranking:")
+    for idx, candidate in enumerate(candidates, 1):
+        log.info("[SMART-SELECT]   %d. '%s': score=%d, patterns=%s, tables=%d, is_default=%s",
+                idx, candidate["source_name"], candidate["score"], 
+                candidate["matched_patterns"][:2], len(candidate["matched_tables"]),
+                candidate["is_default"])
+    
+    # 选择最佳匹配
+    best_candidate = candidates[0]
+    
+    # 如果最佳匹配是默认表（score=0），检查是否有其他更好的匹配
+    if best_candidate["score"] == 0 and len(candidates) > 1:
+        log.info("[SMART-SELECT] Best match is default tables, but other sources exist. Keeping defaults.")
+    
+    # === CUSTOM MODIFICATION - 支持多数据源匹配 + 默认表作为基础 ===
+    # 改进逻辑：
+    # 1. 默认表始终加载（作为基础表）
+    # 2. 有关键词匹配时，叠加匹配的表
+    # 3. 支持跨库查询
+    
+    # 过滤出真正有关键词匹配的数据源（score > 0）
+    matched_sources = [c for c in candidates if c["score"] > 0]
+    
+    if not matched_sources:
+        # 没有任何关键词匹配，只使用默认表
+        log.info("[SMART-SELECT] No keyword matches, will use default tables for all sources")
+    else:
+        log.info("[SMART-SELECT] Found %d sources with keyword matches", len(matched_sources))
+    
+    # 为所有数据源设置表（包括未匹配的）
+    for candidate in candidates:
+        best_source = candidate["source"]
+        best_source_name = candidate["source_name"]
+        default_tables = getattr(best_source, "_default_tables", [])
+        
+        # 确定要设置的表：默认表 + 匹配的表
+        if candidate in matched_sources:
+            # 有关键词匹配：默认表 + 匹配表
+            matched_tables = candidate["matched_tables"]
+            tables_to_set = set(default_tables) | matched_tables  # 合并，去重
+            log.info("[SMART-SELECT] Source '%s': default_tables=%s + matched_tables=%s",
+                    best_source_name, default_tables, list(matched_tables)[:5])
+        else:
+            # 无关键词匹配：只用默认表
+            tables_to_set = set(default_tables)
+            if tables_to_set:
+                log.info("[SMART-SELECT] Source '%s': using default_tables only: %s",
+                        best_source_name, list(tables_to_set))
+        
+        if tables_to_set:
+            try:
+                # 验证表是否存在
+                all_tables = best_source._all_table_names()
+                valid_tables = [t for t in tables_to_set if t in all_tables]
+                
+                if valid_tables:
+                    best_source.set_analysis_tables(valid_tables)
+                    changed = True
+                    
+                    if candidate in matched_sources:
+                        log.info("[SMART-SELECT] ✅ Set tables for '%s' (score=%d, default=%d + matched=%d) → %s",
+                                best_source_name, candidate["score"], 
+                                len(default_tables), len(matched_tables), valid_tables)
+                    else:
+                        log.info("[SMART-SELECT] ✅ Set default tables for '%s': %s (no keyword match)",
+                                best_source_name, valid_tables)
+                else:
+                    log.warning("[SMART-SELECT] No valid tables found for '%s', requested: %s, available: %s",
+                               best_source_name, list(tables_to_set), all_tables[:10])
+            except Exception as exc:
+                log.warning("[SMART-SELECT] Failed to set tables for '%s': %s",
+                           best_source_name, exc)
+        else:
+            log.debug("[SMART-SELECT] No tables to set for '%s' (no default_tables configured)",
+                     best_source_name)
+    # === CUSTOM MODIFICATION END ===
+    
+    # 如果有改变，清除缓存
+    # === CUSTOM MODIFICATION - 总是清除缓存，确保agent能获取最新schema ===
+    # 即使表没有变化，也需要清除缓存，因为agent可能还在使用旧的schema
+    sess._combined_schema_cache = None
+    if hasattr(sess, "_invalidate_merged_source"):
+        sess._invalidate_merged_source()
+    # === CUSTOM MODIFICATION END ===
+    
+    log.info("[SMART-SELECT] Completed. Schema cache cleared.")
+    # 输出所有有表的数据源
+    for entry in all_entries:
+        src = entry.get("source")
+        if isinstance(src, SQLDataSource):
+            tables = src.get_analysis_tables()
+            if tables:
+                log.info("[SMART-SELECT] Final: source='%s', tables=%s",
+                        getattr(src, "name", "SQL"), tables)
+    log.info("=" * 60)
+
+
 
 
 def _build_agent(
@@ -546,6 +992,14 @@ def new_session():
         if auth_user:
             owner_user_id = auth_user["id"]
     sess = session_manager.create(owner_user_id=owner_user_id)
+    
+    # === CUSTOM MODIFICATION START - 自动连接默认数据源 ===
+    try:
+        _auto_connect_default_datasource(sess.session_id)
+    except Exception as exc:
+        log.warning("[session] auto-connect datasource failed sid=%s: %s", sess.session_id, exc)
+    # === CUSTOM MODIFICATION END ===
+    
     try:
         from agent.hooks.models import HookContext
         from data.hooks_store import load_engine
@@ -835,6 +1289,23 @@ def chat_stream(sid: str):
         sess.total_cached_input_tokens,
     )
     data_context = _resolve_data_context(sess, d.get("data_context"))
+    
+    # === CUSTOM MODIFICATION START - 智能表选择 ===
+    # 在应用分析上下文前，先根据问题智能选择表
+    log.info("[chat] before smart-select, user message: %s", message[:200])
+    _smart_select_tables_from_question(sess, message)
+    log.info("[chat] after smart-select, checking sources...")
+    
+    # 调试：检查每个数据源的表
+    for entry in sess._active_entries() if hasattr(sess, "_active_entries") else []:
+        from data.sources.sql import SQLDataSource
+        src = entry.get("source")
+        if isinstance(src, SQLDataSource):
+            log.info("[chat] source '%s' has tables: %s",
+                    getattr(src, "name", "SQL"),
+                    src.get_analysis_tables() or "NONE")
+    # === CUSTOM MODIFICATION END ===
+    
     missing_sql_scope = _apply_sql_analysis_context(sess, data_context)
     if missing_sql_scope:
         return jsonify({
