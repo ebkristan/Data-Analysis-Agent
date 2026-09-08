@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>智析Agent</title>
+<title>小垒Agent</title>
 <link rel="icon" href="{{ url_for('static', filename='Images/icon.png') }}">
 <script src="{{ url_for('static', filename='js/theme_bootstrap.js', v='fe0') }}"></script>
 <link rel="stylesheet" href="{{ url_for('static', filename='css/agent_chat.css', v='v1.3.0') }}">
@@ -30,9 +30,9 @@
   <aside class="sidebar sidebar-hub" id="app-sidebar">
     <div class="sb-main">
       <header class="sb-brand">
-        <img class="sb-brand-icon" src="/static/Images/icon.png" alt="智析 Agent">
+        <img class="sb-brand-icon" src="/static/Images/icon.png" alt="小垒 Agent">
         <div class="sb-brand-text">
-          <span class="sb-brand-name" data-i18n="app.title">智析 Agent</span>
+          <span class="sb-brand-name" data-i18n="app.title">小垒 Agent</span>
           <span class="sb-brand-tagline" data-i18n="app.subtitle">Intelligent Analysis Agent</span>
         </div>
       </header>
@@ -57,8 +57,10 @@
           <select class="sb-status-select native-model-select" id="model-sel-sidebar" aria-label="Sidebar model" hidden>
             <option value="" data-i18n="sidebar.model_placeholder">— 选择模型 —</option>
           </select>
-          <button class="sb-status-iconbtn" data-i18n-title="modal.settings.title"
-                  title="模型设置" data-action="openOverlay:ov-settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
+          <!-- === CUSTOM MODIFICATION START - 移除模型设置按钮 === -->
+          <!-- <button class="sb-status-iconbtn" data-i18n-title="modal.settings.title"
+                  title="模型设置" data-action="openOverlay:ov-settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button> -->
+          <!-- === CUSTOM MODIFICATION END === -->
         </div>
 
         <button class="sb-status-row" id="src-row" data-action="openSidebarDrawer:sources"
@@ -70,22 +72,22 @@
         </button>
         <span id="src-hint" hidden data-i18n="sidebar.hint.noconn">请上传文件或连接数据库</span>
 
-        <button class="sb-status-row" id="mcp-sidebar-card" data-action="openMcpSettings"
+        <!-- <button class="sb-status-row" id="mcp-sidebar-card" data-action="openMcpSettings"
                 title="点击管理 MCP 工具服务器">
           <span class="sb-status-dot" id="mcp-dot"></span>
           <span class="sb-status-label">MCP</span>
           <span class="sb-status-value" id="mcp-status-text" data-i18n="sidebar.mcp_disconnected">未连接</span>
           <span class="sb-status-chev">›</span>
         </button>
-        <span id="mcp-status-hint" hidden>点击管理 MCP 工具服务器</span>
+        <span id="mcp-status-hint" hidden>点击管理 MCP 工具服务器</span> -->
 
-        <button class="sb-status-row" id="ws-sidebar-card" data-action="openWorkspace"
+        <!-- <button class="sb-status-row" id="ws-sidebar-card" data-action="openWorkspace"
                 title="点击挂载 / 查看工作目录">
           <span class="sb-status-dot" id="ws-dot"></span>
           <span class="sb-status-label" data-i18n="sidebar.workspace">工作目录</span>
           <span class="sb-status-value" id="ws-status-text" data-i18n="workspace.unmounted">未挂载</span>
           <span class="sb-status-chev">›</span>
-        </button>
+        </button> -->
 
         <div class="sb-autosave-row hidden" id="autosave-status"></div>
       </section>
@@ -97,18 +99,18 @@
         <button class="sb-nav-item" data-sidebar-nav="skills" data-action="openPanel:skills">
           <span class="sb-nav-icon"><svg viewBox="0 0 24 24"><path d="M12 2l3 7h7l-5.5 4 2 7L12 16l-6.5 4 2-7L2 9h7z"/></svg></span><span class="sb-nav-label">Skills</span>
         </button>
-        <button class="sb-nav-item" data-sidebar-nav="knowledge" data-action="openPanel:knowledge">
+        <!-- <button class="sb-nav-item" data-sidebar-nav="knowledge" data-action="openPanel:knowledge">
           <span class="sb-nav-icon"><svg viewBox="0 0 24 24"><path d="M4 5a2 2 0 0 1 2-2h6v17H6a2 2 0 0 1-2-2V5z"/><path d="M20 5a2 2 0 0 0-2-2h-6v17h6a2 2 0 0 0 2-2V5z"/></svg></span><span class="sb-nav-label" data-i18n="sidebar.knowledge">业务知识库</span>
         </button>
         <button class="sb-nav-item" data-sidebar-nav="mcp" data-action="openPanel:mcp">
           <span class="sb-nav-icon"><svg viewBox="0 0 24 24"><path d="M9 2v6M15 2v6M9 18v4M15 18v4M5 8h14v5a4 4 0 0 1-4 4H9a4 4 0 0 1-4-4V8z"/></svg></span><span class="sb-nav-label">MCP</span>
-        </button>
+        </button> -->
         <button class="sb-nav-item" data-sidebar-nav="history" data-action="openSidebarDrawer:sessions">
           <span class="sb-nav-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></span><span class="sb-nav-label" data-i18n="sidebar.history">历史对话</span>
         </button>
-        <button class="sb-nav-item" data-sidebar-nav="business-canvas" data-action="openBusinessCanvas">
+        <!-- <button class="sb-nav-item" data-sidebar-nav="business-canvas" data-action="openBusinessCanvas">
           <span class="sb-nav-icon"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></span><span class="sb-nav-label" data-i18n="sidebar.business_canvas">商业画布</span>
-        </button>
+        </button> -->
         <button class="sb-nav-item" data-sidebar-nav="help" data-action="openInstruction">
           <span class="sb-nav-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 0 1 5 0c0 1.5-2.5 2-2.5 3.5"/><circle cx="12" cy="17" r=".5" fill="currentColor"/></svg></span><span class="sb-nav-label" data-i18n="sidebar.help">帮助文档</span>
         </button>
@@ -118,7 +120,7 @@
 
       <footer class="sb-footer">
         {% if is_cloud_managed %}
-        <div id="cloud-quota" class="sb-quota" style="display:flex;align-items:center;gap:6px;margin-bottom:8px">
+        <!-- <div id="cloud-quota" class="sb-quota" style="display:flex;align-items:center;gap:6px;margin-bottom:8px">
           <span style="font-size:var(--fs-xs);color:var(--color-sidebar-fg);opacity:.6;white-space:nowrap">今日额度</span>
           <div style="flex:1;height:5px;background:var(--color-sidebar-bg);border-radius:3px;overflow:hidden">
             <div id="cloud-quota-bar" style="height:100%;width:0;background:#22c55e;border-radius:3px;transition:width .3s,background .3s"></div>
@@ -126,11 +128,11 @@
           <span id="cloud-quota-text" style="font-size:calc(var(--fs-xs) * .8);color:var(--color-sidebar-fg);opacity:.6;white-space:nowrap">--</span>
         </div>
         {% endif %}
-        <div class="sb-footer-meta" style="font-size:var(--fs-xs);font-weight:600;color:var(--color-sidebar-fg);opacity:.85">v1.3.0 LTS · <a href="https://www.zaferliu.me" target="_blank" rel="noopener noreferrer" style="color:var(--color-accent);text-decoration:none;font-weight:700;font-size:calc(var(--fs-xs) * 1.05)">@Zafer_Liu</a></div>
+        <!-- <div class="sb-footer-meta" style="font-size:var(--fs-xs);font-weight:600;color:var(--color-sidebar-fg);opacity:.85">v1.3.0 LTS · <a href="https://www.zaferliu.me" target="_blank" rel="noopener noreferrer" style="color:var(--color-accent);text-decoration:none;font-weight:700;font-size:calc(var(--fs-xs) * 1.05)">@Zafer_Liu</a></div> -->
         <div class="sb-footer-actions">
-          <button class="sb-iconbtn sb-footer-update" data-action="openOverlay:ov-update" data-i18n="sidebar.check_update"><svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 3v6h-6"/></svg><span data-i18n="sidebar.check_update">检查更新</span></button>
+          <!-- <button class="sb-iconbtn sb-footer-update" data-action="openOverlay:ov-update" data-i18n="sidebar.check_update"><svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 3v6h-6"/></svg><span data-i18n="sidebar.check_update">检查更新</span></button>
           <button class="sb-iconbtn sb-footer-community" type="button" data-action="openOverlay:ov-community"
-                  title="社群" data-i18n-title="sidebar.community"><svg viewBox="0 0 24 24"><path d="M21 11.5a8.5 8.5 0 0 1-12.5 7.5L3 21l2-5.5A8.5 8.5 0 1 1 21 11.5z"/></svg></button>
+                  title="社群" data-i18n-title="sidebar.community"><svg viewBox="0 0 24 24"><path d="M21 11.5a8.5 8.5 0 0 1-12.5 7.5L3 21l2-5.5A8.5 8.5 0 1 1 21 11.5z"/></svg></button> -->
           <button class="sb-iconbtn sb-footer-settings" data-action="openOverlay:ov-app-settings"
                   title="设置" data-i18n-title="sidebar.settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
           <button class="sb-iconbtn" id="lang-toggle" data-action="toggleLang">EN</button>
@@ -193,7 +195,7 @@
               <button class="sb-dropdown-item" data-action="openOverlay:ov-gsheets" data-i18n="sidebar.connect_gsheets"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M9 3v18M15 3v18"/></svg><span data-i18n="sidebar.connect_gsheets">连接 Google Sheets</span></button>
               <button class="sb-dropdown-item" data-action="openOverlay:ov-api"     data-i18n="sidebar.connect_api"><svg viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg><span data-i18n="sidebar.connect_api">连接自定义 API</span></button>
               <hr class="sb-dropdown-sep">
-              <button class="sb-dropdown-item" data-action="openWorkspace" data-i18n="sidebar.mount_workspace"><svg viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg><span data-i18n="sidebar.mount_workspace">挂载工作目录</span></button>
+              <!-- <button class="sb-dropdown-item" data-action="openWorkspace" data-i18n="sidebar.mount_workspace"><svg viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg><span data-i18n="sidebar.mount_workspace">挂载工作目录</span></button> -->
               <hr class="sb-dropdown-sep" id="sb-disc-sep" hidden>
               <button class="sb-dropdown-item sb-dropdown-item--danger"
                       id="btn-disc" hidden data-action="disconnectSrc"
@@ -582,7 +584,7 @@
                 title="隐藏左侧面板，专注对话">⛶ 专注对话</button>
         <button class="hdr-btn" id="btn-job-history" data-action="openJobHistory"
                 data-i18n="job.history.title">任务历史</button>
-        <button class="hdr-btn" id="btn-schema" data-action="openSchemaView" data-i18n="header.schema"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" class="icon-inline" xmlns="http://www.w3.org/2000/svg"><rect x="1" y="3" width="14" height="2.5" rx="1" fill="currentColor"/><rect x="1" y="7" width="14" height="2.5" rx="1" fill="currentColor" opacity=".7"/><rect x="1" y="11" width="9" height="2.5" rx="1" fill="currentColor" opacity=".45"/></svg>数据预览</button>
+<!--        <button class="hdr-btn" id="btn-schema" data-action="openSchemaView" data-i18n="header.schema"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" class="icon-inline" xmlns="http://www.w3.org/2000/svg"><rect x="1" y="3" width="14" height="2.5" rx="1" fill="currentColor"/><rect x="1" y="7" width="14" height="2.5" rx="1" fill="currentColor" opacity=".7"/><rect x="1" y="11" width="9" height="2.5" rx="1" fill="currentColor" opacity=".45"/></svg>数据预览</button>-->
         {% if is_cloud_managed %}
         <button class="hdr-btn" id="cloud-logout" data-action="cloudLogout" title="退出登录" style="color:#f87171"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>退出</button>
         {% endif %}
@@ -591,7 +593,7 @@
 
     <div class="messages" id="messages">
       <div class="welcome" id="welcome">
-        <img src="/static/Images/icon.png" alt="智析 Agent" class="welcome-brand-logo">
+        <img src="/static/Images/icon.png" alt="小垒 Agent" class="welcome-brand-logo">
         <h2 data-i18n="welcome.title">开始您的数据分析</h2>
         <p data-i18n-html="welcome.desc">连接数据库或上传 Excel，用自然语言提问，AI 会自动查询、分析并生成图表。<br>
            输入 <strong>/</strong> 可快速选择专属命令。</p>
@@ -687,22 +689,22 @@
                 <svg viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5M3 12a9 3 0 0 0 18 0"/></svg>
                 <span data-i18n="sidebar.datasource">数据源</span>
               </button>
-              <button class="composer-tool composer-mcp" type="button" data-action="openMcpSettings" title="MCP">
+              <!-- <button class="composer-tool composer-mcp" type="button" data-action="openMcpSettings" title="MCP">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 2v6M15 2v6M9 18v4M15 18v4M5 8h14v5a4 4 0 0 1-4 4H9a4 4 0 0 1-4-4V8z"/></svg>
                 <span>MCP</span>
-              </button>
+              </button> -->
 
-              <button class="composer-tool composer-workspace" type="button" data-action="openWorkspace"
+              <!-- <button class="composer-tool composer-workspace" type="button" data-action="openWorkspace"
                       data-i18n-title="sidebar.workspace" title="工作目录">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
                 <span data-i18n="sidebar.workspace">工作目录</span>
-              </button>
-              <button class="composer-tool composer-teams" type="button" data-action="openTeams"
+              </button> -->
+              <!-- <button class="composer-tool composer-teams" type="button" data-action="openTeams"
                       title="团队">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M18 8a3 3 0 1 1-6 0 3 3 0 0 1 6 0M12 11a4 4 0 0 1 4 4v2"/></svg>
                 <span data-i18n="composer.teams">团队</span>
-              </button>
-              <div class="composer-tool composer-permission dropdown" id="composer-permission-wrap" data-i18n-title="workspace.permission_hint" title="连接工作目录后可调整权限">
+              </button> -->
+              <!-- <div class="composer-tool composer-permission dropdown" id="composer-permission-wrap" data-i18n-title="workspace.permission_hint" title="连接工作目录后可调整权限">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
                 <button class="composer-permission-trigger" type="button" aria-haspopup="listbox" aria-expanded="false" disabled>
                   <span id="composer-permission-label">只读</span>
@@ -720,7 +722,7 @@
                   <option value="read_only" data-i18n="workspace.permission.read_only">只读</option>
                   <option value="read_write" data-i18n="workspace.permission.read_write">可读和编辑</option>
                 </select>
-              </div>
+              </div> -->
 
             </div>
 

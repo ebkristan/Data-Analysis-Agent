@@ -541,6 +541,12 @@ if (globalThis.__baaAppDelegationRegistered) {
     // Reflect packaged builds without bundled MCP resources immediately;
     // external MCP configuration remains available through the settings panel.
     if (window.BAA.mcp) await window.BAA.mcp.loadMcpServers();
+    
+    // === CUSTOM MODIFICATION START - 页面加载时自动加载默认数据源 ===
+    // 等待后端auto-connect完成（100ms通常足够）
+    await new Promise(resolve => setTimeout(resolve, 100));
+    // === CUSTOM MODIFICATION END ===
+    
     // Restore any sources that survived a page reload (new session = empty, that's fine)
     try {
       const sr = await fetch(`/api/session/${state.SID}/sources`);

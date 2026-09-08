@@ -1291,13 +1291,16 @@ import { chatStream } from "../features/chat-stream.js";
     const configs = state.modelConfigs || {};
     const llmDefaults = uiState.modelDefaults || {};  // loaded by loadLlmData()
 
+    // === CUSTOM MODIFICATION START - 移除内置模型提供商 ===
+    // 原始内置提供商已注释，只保留空对象
     const BUILTIN_META = {
-      deepseek:   { label: "DeepSeek",         icon: "/static/Images/icon.png" },
-      openai:     { label: "OpenAI / ChatGPT", icon: "/static/Images/icon.png" },
-      atlascloud: { label: "AtlasCloud",       icon: "/static/Images/icon.png" },
-      ollama:     { label: "Ollama (本地)",     icon: "/static/Images/icon.png", local: true },
+      // deepseek:   { label: "DeepSeek",         icon: "/static/Images/icon.png" },
+      // openai:     { label: "OpenAI / ChatGPT", icon: "/static/Images/icon.png" },
+      // atlascloud: { label: "AtlasCloud",       icon: "/static/Images/icon.png" },
+      // ollama:     { label: "Ollama (本地)",     icon: "/static/Images/icon.png", local: true },
     };
-    const BUILTIN_ORDER = ["deepseek", "openai", "atlascloud", "ollama"];
+    const BUILTIN_ORDER = []; // 清空内置提供商列表
+    // === CUSTOM MODIFICATION END ===
 
     /* ── LLM tab reactive state ────────────────────── */
     if (!uiState._llmProviders) {
@@ -1353,11 +1356,13 @@ import { chatStream } from "../features/chat-stream.js";
       /* ── global status banner ── */
       uiState._llmMsg ? Vue.h("div", { class: "llm-global-msg " + (uiState._llmMsg.type || "ok") }, uiState._llmMsg.text) : null,
 
+      /* === CUSTOM MODIFICATION START - 隐藏内置模型提供商区域 === */
       /* ── built-in providers ── */
-      Vue.h("section", { class: "settings-sec" }, [
-        Vue.h("div", { class: "settings-sec-title" }, "内置模型提供商"),
-        Vue.h("div", null, uiState._llmProviders.map(function (p) { return _llmProviderCard(p); })),
-      ]),
+      // Vue.h("section", { class: "settings-sec" }, [
+      //   Vue.h("div", { class: "settings-sec-title" }, "内置模型提供商"),
+      //   Vue.h("div", null, uiState._llmProviders.map(function (p) { return _llmProviderCard(p); })),
+      // ]),
+      /* === CUSTOM MODIFICATION END === */
 
       /* ── custom models ── */
       Vue.h("section", { class: "settings-sec" }, [
@@ -3030,10 +3035,10 @@ import { chatStream } from "../features/chat-stream.js";
     const tabs = [
       ["general", "通用"],
       ["llm", "LLM模型"],
-      ["model", "知识库检索"],
-      ["gpu", "GPU算力", "规划中"],
+      // ["model", "知识库检索"],
+      // ["gpu", "GPU算力", "规划中"],
       ["memory", "记忆"],
-      ["bots", "机器人"],
+      // ["bots", "机器人"],
       ["hooks", "Hooks"],
       ["storage", "存储"],
     ];

@@ -19,7 +19,7 @@ import { getUiIsland } from "../core/ui-registry.js";
 import { scheduleAutosave, setLoadedName } from "../legacy/autosave.js";
 import { open as openCheckpoints } from "../legacy/checkpoints.js";
 import { commandHandlers } from "../legacy/command_handlers.js";
-import { resetSourceState } from "../legacy/datasource.js";
+import { resetSourceState, renderSourceList, setSrc } from "../legacy/datasource.js";
 import {
   applyLiveEvent,
   open as openJobHistory,
@@ -2065,6 +2065,37 @@ import { loadSavedList } from "../legacy/sessions.js";
       window.BAA.skills?.loadSkills?.(),
     ]);
     resetSourceState();
+    
+    // === CUSTOM MODIFICATION START - 新对话自动加载默认数据源 ===
+    // 等待一小段时间，确保后端auto-connect完成
+    await new Promise(resolve => setTimeout(resolve, 50));
+    
+    console.log('[newChat] Loading default datasources for session:', state.SID);
+    try {
+      const sr = await fetch(`/api/session/${state.SID}/sources`);
+      console.log('[newChat] Sources API response status:', sr.status);
+      const sd = await sr.json();
+      console.log('[newChat] Sources data:', sd);
+      
+      if (sd.sources && sd.sources.length > 0) {
+        console.log('[newChat] Found', sd.sources.length, 'sources, rendering...');
+        renderSourceList(sd.sources);
+        const active = sd.sources.find(s => s.active);
+        if (active) {
+          console.log('[newChat] Active source found:', active.name);
+          setSrc(active.name, 'src.hint.file', true);
+        } else if (sd.sources[0]) {
+          console.log('[newChat] No active source, displaying first:', sd.sources[0].name);
+          setSrc(sd.sources[0].name, 'src.hint.file', false);
+        }
+      } else {
+        console.warn('[newChat] No sources returned from API');
+      }
+    } catch (err) {
+      console.error('[newChat] Failed to load default datasources:', err);
+    }
+    // === CUSTOM MODIFICATION END ===
+    
     setLoadedName("", "");
     window.BAA.sidebar?.setSessionName?.("新会话", "");
     clearMessages();

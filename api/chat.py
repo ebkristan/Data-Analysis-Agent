@@ -65,6 +65,8 @@ def _auto_connect_default_datasource(session_id: str):
         datasources = config.get("datasources", [])
         if datasources:
             success_count = 0
+            first_source_id = None  # 记录第一个成功连接的数据源
+            
             for idx, ds_config in enumerate(datasources):
                 # 检查是否启用该数据源
                 if not ds_config.get("enabled", True):
@@ -72,10 +74,18 @@ def _auto_connect_default_datasource(session_id: str):
                     continue
                 
                 try:
-                    _connect_single_datasource(sess, session_id, ds_config)
-                    success_count += 1
+                    source_id = _connect_single_datasource(sess, session_id, ds_config)
+                    log.debug("[auto-connect] datasource #%d returned source_id: %s", idx, source_id)
+                    
+                    if source_id is not None:
+                        success_count += 1
+                        # add_source已经自动激活了，无需额外操作
+                        log.debug("[auto-connect] datasource #%d activated: %s", idx, source_id)
                 except Exception as exc:
                     log.error("[auto-connect] datasource #%d FAILED: %s", idx, exc)
+            
+            log.info("[auto-connect] connected %d/%d datasources for sid=%s (all auto-activated)", 
+                     success_count, len(datasources), session_id)
             
             log.info("[auto-connect] connected %d/%d datasources for sid=%s", 
                      success_count, len(datasources), session_id)
@@ -140,8 +150,10 @@ def _connect_single_datasource(sess, session_id: str, config: dict):
         source_id = sess.add_source(source)
         log.info("[auto-connect] SUCCESS  sid=%s  source='%s'  source_id=%s", 
                  session_id, display_name, source_id)
+        return source_id  # === 新增：返回source_id ===
     else:
         log.warning("[auto-connect] unsupported type: %s for '%s'", conn_type, display_name)
+        return None  # === 新增：返回None ===
 # === CUSTOM MODIFICATION END ===
 
 
@@ -620,6 +632,7 @@ def _try_load_auto_select_config(source) -> bool:
                     source._max_tables = ds.get("max_tables", 20)
                     source._table_mapping = ds.get("table_mapping", {})
                     source._default_tables = ds.get("default_tables", [])
+                    source._config_loaded_at = __import__('time').time()  # 记录加载时间
                     
                     log.info("[auto-table-select] loaded config for old session source '%s', select_all=%s",
                             getattr(source, "name", "SQL"), source._select_all_tables)
@@ -683,10 +696,36 @@ def _smart_select_tables_from_question(sess, question: str):
         # 诊断：输出数据源详情
         log.info("[SMART-SELECT] Checking source: '%s', conn_str: %s", source_name, conn_str[:50] if conn_str else "N/A")
         
-        # === 新增：确保数据源已加载配置 ===
-        # 如果数据源没有 _auto_select_enabled 属性，尝试加载配置
+        # === 新增：智能配置加载机制 ===
+        # 策略：
+        # 1. 如果从未加载过配置 → 加载
+        # 2. 如果配置文件被修改（通过时间戳检测）→ 重新加载
+        # 这样既避免重复加载，又能及时响应配置更新
+        
+        should_load = False
+        
         if not hasattr(src, "_auto_select_enabled"):
-            log.info("[SMART-SELECT] Source '%s' missing config, trying to load...", source_name)
+            # 首次加载
+            should_load = True
+            log.info("[SMART-SELECT] Source '%s': first time loading config", source_name)
+        elif not hasattr(src, "_config_loaded_at"):
+            # 旧代码创建的数据源，补充时间戳
+            should_load = True
+            log.info("[SMART-SELECT] Source '%s':补充配置时间戳", source_name)
+        else:
+            # 检查配置文件是否被修改
+            try:
+                from pathlib import Path
+                config_file = Path(__file__).parent.parent / "config" / "default_datasource.json"
+                if config_file.exists():
+                    config_mtime = config_file.stat().st_mtime
+                    if config_mtime > getattr(src, "_config_loaded_at", 0):
+                        should_load = True
+                        log.info("[SMART-SELECT] Source '%s': config file updated, reloading", source_name)
+            except Exception as exc:
+                log.debug("[SMART-SELECT] Failed to check config file mtime: %s", exc)
+        
+        if should_load:
             _try_load_auto_select_config(src)
         # ===结束===
         
@@ -1798,7 +1837,7 @@ def chat_stream(sid: str):
 
                     if is_internal_feishu:
                         send_text(
-                            "🤖 智析 Agent\n" + final_answer,
+                            "🤖 小垒 Agent\n" + final_answer,
                             receive_id=sess.feishu_chat_id,
                             receive_id_type="chat_id",
                         )
