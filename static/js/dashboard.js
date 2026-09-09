@@ -177,7 +177,7 @@
     const s = (id, text) => { const el = $(id); if (el) el.textContent = text; };
     const p = (id, text) => { const el = $(id); if (el) el.placeholder = text; };
     s("btn-back", "←"); $("btn-back").title = T.back;
-    s("nav-brand-label", _lang === "en" ? "Analytics Agent" : "智析Agent");
+    s("nav-brand-label", _lang === "en" ? "Analytics Agent" : "小垒Agent");
     s("opt-manual", T.manual_refresh);
     s("opt-30s", T.seconds_30);
     s("opt-1m", T.minutes_1);
@@ -228,7 +228,7 @@
     if (!resp.ok) { showEmptyState(T.not_found(resp.status)); return; }
     dashboard = await resp.json();
 
-    const brandLabel = _lang === "en" ? "Analytics Agent" : "智析Agent";
+    const brandLabel = _lang === "en" ? "Analytics Agent" : "小垒Agent";
     $("db-name").textContent = dashboard.name || dashboardId;
     document.title = `${dashboard.name || "Dashboard"} — ${brandLabel}`;
 

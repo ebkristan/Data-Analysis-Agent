@@ -29,7 +29,7 @@ def is_configured() -> bool:
 def _build_html(code: str) -> str:
     return (
         '<div style="font-family:system-ui,sans-serif;max-width:400px;margin:0 auto;padding:32px">'
-        '<h2 style="color:#6366f1;margin:0 0 16px">智析Agent 验证码</h2>'
+        '<h2 style="color:#6366f1;margin:0 0 16px">小垒Agent 验证码</h2>'
         '<p style="color:#475569;font-size:14px">您的验证码是：</p>'
         f'<div style="font-size:32px;font-weight:700;letter-spacing:8px;color:#6366f1;'
         f'text-align:center;padding:24px 0;border-radius:12px;background:#f1f5f9;margin:16px 0">{code}</div>'
@@ -48,7 +48,7 @@ def send_code(to_email: str, code: str) -> bool:
     payload = json.dumps({
         "from": _RESEND_FROM,
         "to": [to_email],
-        "subject": "智析Agent — 登录验证码",
+        "subject": "小垒Agent — 登录验证码",
         "html": _build_html(code),
     }).encode("utf-8")
 

@@ -267,7 +267,7 @@ def send_conversation_turn(*, chat_id: str, user_message: str, assistant_message
     """Mirror one completed Web turn in order, splitting long replies safely."""
     parts = [
         ("🧑 Web 对话", str(user_message or "").strip()),
-        ("🤖 智析 Agent", str(assistant_message or "").strip()),
+        ("🤖 小垒 Agent", str(assistant_message or "").strip()),
     ]
     for label, content in parts:
         if not content:
@@ -280,4 +280,4 @@ def send_conversation_turn(*, chat_id: str, user_message: str, assistant_message
 
 
 def send_test_message() -> None:
-    send_text("智析 Agent 已成功连接飞书应用机器人。后续分析结果将可同步至此群。")
+    send_text("小垒 Agent 已成功连接飞书应用机器人。后续分析结果将可同步至此群。")

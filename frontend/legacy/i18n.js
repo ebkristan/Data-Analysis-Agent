@@ -13,7 +13,7 @@
   const T = {
     zh: {
       // ── App ──────────────────────────────────────────────────────
-      'app.title': '智析Agent',
+      'app.title': '小垒Agent',
       'app.subtitle': 'Intelligent Analysis Agent',
       // ── Sidebar ──────────────────────────────────────────────────
       'sidebar.datasource': '数据源',

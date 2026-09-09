@@ -174,7 +174,97 @@ def _warehouse_file(filename: str, user_id: str = "") -> Path:
     return _scoped_dir(_BASE_WAREHOUSE_DIR, user_id) / Path(filename).name
 
 
+def _find_datasource_reference(source) -> dict | None:
+    """
+    尝试在 default_datasource.json 中找到匹配的数据源配置。
+    返回数据源引用信息，用于安全地恢复连接。
+    
+    === CUSTOM MODIFICATION - 安全的数据仓库机制 ===
+    """
+    from pathlib import Path
+    import json
+    
+    try:
+        from data.connector import SQLDataSource
+        if not isinstance(source, SQLDataSource):
+            return None
+        
+        # 读取 default_datasource.json
+        config_file = Path(__file__).parent.parent / "config" / "default_datasource.json"
+        if not config_file.exists():
+            return None
+        
+        with open(config_file, "r", encoding="utf-8") as f:
+            config = json.load(f)
+        
+        # 获取当前数据源的连接信息
+        try:
+            current_url = source._engine.url
+            current_host = str(current_url.host or "")
+            current_port = str(current_url.port or "")
+            current_database = str(current_url.database or "")
+            current_username = str(current_url.username or "")
+        except Exception:
+            return None
+        
+        # 检查单数据源模式（向后兼容）
+        if "connection_string" in config and config.get("type") == "sql":
+            conn_str = config.get("connection_string", "")
+            display_name = config.get("display_name", "")
+            if _match_connection_string(conn_str, current_host, current_port, current_database, current_username):
+                return {
+                    "type": "default_single",
+                    "display_name": display_name
+                }
+        
+        # 检查多数据源模式
+        datasources = config.get("datasources", [])
+        for idx, ds in enumerate(datasources):
+            if ds.get("type") != "sql":
+                continue
+            
+            conn_str = ds.get("connection_string", "")
+            display_name = ds.get("display_name", "")
+            
+            if _match_connection_string(conn_str, current_host, current_port, current_database, current_username):
+                return {
+                    "type": "default_multi",
+                    "index": idx,
+                    "display_name": display_name
+                }
+        
+        return None
+        
+    except Exception as exc:
+        log.debug("[warehouse] failed to find datasource reference: %s", exc)
+        return None
+
+
+def _match_connection_string(conn_str: str, host: str, port: str, database: str, username: str) -> bool:
+    """检查连接字符串是否匹配指定的连接参数"""
+    import re
+    
+    # 解析连接字符串
+    # 格式: dialect+driver://username:password@host:port/database
+    pattern = r"[\w+]+://([^:]+):[^@]+@([^:]+):(\d+)/(.+?)(?:\?|$)"
+    match = re.match(pattern, conn_str)
+    
+    if not match:
+        return False
+    
+    cfg_username, cfg_host, cfg_port, cfg_database = match.groups()
+    
+    # 比较关键参数（不比较密码）
+    return (
+        cfg_username == username and
+        cfg_host == host and
+        cfg_port == port and
+        cfg_database.split("?")[0] == database  # 移除查询参数
+    )
+
+
 def _serialize_source(entry: dict, active_ids: set[str]) -> dict | None:
+    """Serialize a data source for warehouse storage."""
     source = entry.get("source")
     source_id = str(entry.get("id") or "")
     base = {
@@ -191,16 +281,33 @@ def _serialize_source(entry: dict, active_ids: set[str]) -> dict | None:
             payload["db_path"] = str(db_path)
         return payload
     if isinstance(source, SQLDataSource):
-        try:
-            conn = source._engine.url.render_as_string(hide_password=True)
-        except Exception:
-            conn = ""
-        return {
+        # === CUSTOM MODIFICATION START - 安全保存SQL数据源 ===
+        # 优先保存数据源引用（从 default_datasource.json），而不是完整连接字符串
+        payload = {
             **base,
             "kind": "sql",
-            "connection_string": conn,
             "analysis_tables": source.get_analysis_tables(),
         }
+        
+        # 尝试匹配 default_datasource.json 中的数据源
+        datasource_ref = _find_datasource_reference(source)
+        
+        if datasource_ref:
+            # 找到匹配的配置，只保存引用
+            payload["datasource_ref"] = datasource_ref
+            payload["connection_string"] = ""  # 不保存密码
+        else:
+            # 未找到匹配，保存完整连接字符串（降级方案）
+            try:
+                conn = source._engine.url.render_as_string(hide_password=False)
+            except Exception:
+                try:
+                    conn = str(getattr(source, "_connection_string", ""))
+                except Exception:
+                    conn = ""
+            payload["connection_string"] = conn
+        # === CUSTOM MODIFICATION END ===
+        return payload
     if isinstance(source, GoogleSheetsDataSource):
         creds = getattr(source, "_creds_dict", None)
         spreadsheet = getattr(source, "_spreadsheet_ref", "")
@@ -224,6 +331,46 @@ def _serialize_source(entry: dict, active_ids: set[str]) -> dict | None:
     return None
 
 
+def _get_connection_from_config(datasource_ref: dict) -> str:
+    """
+    根据数据源引用从 default_datasource.json 获取连接字符串。
+    
+    === CUSTOM MODIFICATION - 安全的数据仓库机制 ===
+    """
+    from pathlib import Path
+    import json
+    
+    try:
+        config_file = Path(__file__).parent.parent / "config" / "default_datasource.json"
+        if not config_file.exists():
+            return ""
+        
+        with open(config_file, "r", encoding="utf-8") as f:
+            config = json.load(f)
+        
+        ref_type = datasource_ref.get("type")
+        
+        # 单数据源模式
+        if ref_type == "default_single":
+            if config.get("type") == "sql":
+                return config.get("connection_string", "")
+        
+        # 多数据源模式
+        elif ref_type == "default_multi":
+            idx = datasource_ref.get("index")
+            datasources = config.get("datasources", [])
+            if isinstance(idx, int) and 0 <= idx < len(datasources):
+                ds = datasources[idx]
+                if ds.get("type") == "sql":
+                    return ds.get("connection_string", "")
+        
+        return ""
+        
+    except Exception as exc:
+        log.warning("[warehouse] failed to get connection from config: %s", exc)
+        return ""
+
+
 def _restore_source(info: dict):
     kind = str(info.get("kind") or "")
     name = str(info.get("name") or "").strip()
@@ -241,13 +388,27 @@ def _restore_source(info: dict):
             return ExcelDataSource.from_database(file_path, name or Path(file_path).name, db_path)
         return ExcelDataSource(file_path, name or Path(file_path).name)
     if kind == "sql":
+        # === CUSTOM MODIFICATION START - 从 default_datasource.json 获取连接信息 ===
+        datasource_ref = info.get("datasource_ref")
         conn = str(info.get("connection_string") or "")
+        
+        # 如果有数据源引用，尝试从配置文件获取连接字符串
+        if datasource_ref:
+            conn_from_config = _get_connection_from_config(datasource_ref)
+            if conn_from_config:
+                conn = conn_from_config
+                log.debug("[warehouse] restored SQL source from config reference: %s", name)
+            else:
+                log.warning("[warehouse] datasource reference not found in config, name=%s", name)
+        
         if not conn:
-            raise ValueError("SQL 连接字符串为空")
+            raise ValueError(f"SQL 连接字符串为空: {name}")
+        
         source = SQLDataSource(conn, name)
         tables = info.get("analysis_tables") or []
         if tables:
             source.set_analysis_tables([str(item) for item in tables])
+        # === CUSTOM MODIFICATION END ===
         return source
     if kind == "gsheets":
         creds = info.get("creds_dict")

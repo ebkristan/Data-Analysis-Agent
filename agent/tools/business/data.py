@@ -695,10 +695,13 @@ class DataToolsMixin:
         n_deciles: int = 10,
         analysis_options: dict | None = None,
     ) -> str:
-        if not self.data_source:
+        # === CUSTOM MODIFICATION START - 多数据源支持 ===
+        src, rewritten_sql = self._route_query(sql)
+        if not src:
             return "No data source connected."
 
-        df, error = self.data_source.execute_query(sql)
+        df, error = src.execute_query(rewritten_sql)
+        # === CUSTOM MODIFICATION END ===
         if error:
             return f"SQL Error while fetching data: {error}"
         if df.empty:
@@ -732,10 +735,13 @@ class DataToolsMixin:
         analysis_options: dict | None = None,
     ):
         """Run large time-series analyses as cancellable JobRunner work."""
-        if not self.data_source:
+        # === CUSTOM MODIFICATION START - 多数据源支持 ===
+        src, rewritten_sql = self._route_query(sql)
+        if not src:
             return "No data source connected."
 
-        df, error = self.data_source.execute_query(sql)
+        df, error = src.execute_query(rewritten_sql)
+        # === CUSTOM MODIFICATION END ===
         if error:
             return f"SQL Error while fetching data: {error}"
         if df.empty:
@@ -990,9 +996,14 @@ class DataToolsMixin:
     def _tool_generate_chart(
         self, chart_type: str, sql: str, field_mapping: dict, title: str = ""
     ) -> dict:
-        if not self.data_source:
+        # === CUSTOM MODIFICATION START - 多数据源支持 ===
+        # 使用 _route_query 路由到正确的数据源，而不是直接使用 self.data_source
+        src, rewritten_sql = self._route_query(sql)
+        if not src:
             return {"error": "No data source connected."}
-        df, error = self.data_source.execute_query(sql)
+        
+        df, error = src.execute_query(rewritten_sql)
+        # === CUSTOM MODIFICATION END ===
         if error:
             return {"error": f"Data query failed: {error}"}
         if df.empty:
@@ -1002,9 +1013,14 @@ class DataToolsMixin:
     def _tool_generate_chart_with_jobs(
         self, chart_type: str, sql: str, field_mapping: dict, title: str = ""
     ):
-        if not self.data_source:
+        # === CUSTOM MODIFICATION START - 多数据源支持 ===
+        # 使用 _route_query 路由到正确的数据源
+        src, rewritten_sql = self._route_query(sql)
+        if not src:
             return {"error": "No data source connected."}
-        df, error = self.data_source.execute_query(sql)
+        
+        df, error = src.execute_query(rewritten_sql)
+        # === CUSTOM MODIFICATION END ===
         if error:
             return {"error": f"Data query failed: {error}"}
         if df.empty:

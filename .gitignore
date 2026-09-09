@@ -51,6 +51,10 @@ auth.db
 auth.db-wal
 auth.db-shm
 
+# SQLite临时文件（所有数据库）
+*.sqlite-wal
+*.sqlite-shm
+
 # ---- Local-only tests ----
 # Lowercase tests/ is a local regression suite.  The release quality command
 # uses the existing uppercase Test/ package, so keep this exact path separate.
@@ -133,3 +137,7 @@ scripts/*
 # Untracked assets
 Information/assets/LOGO.png
 PRODUCT.md
+
+# === CUSTOM MODIFICATION - 敏感配置文件 ===
+# 默认数据源配置（包含数据库密码）
+config/default_datasource.json

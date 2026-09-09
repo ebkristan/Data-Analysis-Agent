@@ -15,7 +15,7 @@ from infrastructure.paths import resource_path
 PROJECT_COMMANDS_DIR = resource_path("commands")
 
 _FALLBACK = (
-    ("help", "查看智析 Agent 可用命令及使用方法", "❓", "tools"),
+    ("help", "查看小垒 Agent 可用命令及使用方法", "❓", "tools"),
     ("clear", "清除当前对话内容，保留数据源、模型和工作目录连接", "🧹", "session"),
     ("compact", "立即压缩当前对话上下文，保留关键结论和最近内容", "🗜️", "session"),
     ("instruction", "设置仅对当前分析对话生效的临时指令", "📝", "session"),

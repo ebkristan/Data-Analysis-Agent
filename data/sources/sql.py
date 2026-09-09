@@ -42,6 +42,10 @@ class SQLDataSource(DataSource):
     def __init__(self, connection_string: str, display_name: str = ""):
         from sqlalchemy import create_engine, text, inspect as sa_inspect
 
+        # === CUSTOM MODIFICATION START - 保存原始连接字符串用于数据仓库恢复 ===
+        self._connection_string = connection_string
+        # === CUSTOM MODIFICATION END ===
+
         # SQL Server connections otherwise use the ODBC driver's long default
         # login timeout.  Keep the UI responsive when the host/port is wrong.
         # `timeout` is a pyodbc-specific connect argument, so never pass it to
@@ -123,8 +127,14 @@ class SQLDataSource(DataSource):
         unknown = [name for name in requested if name not in catalog_set]
         if unknown:
             raise ValueError(f"数据库中不存在这些表：{', '.join(unknown)}")
-        if len(requested) > 20:
-            raise ValueError("一次最多选择 20 张 SQL 分析表")
+        
+        # === CUSTOM MODIFICATION START - 支持更多表（可配置） ===
+        # 原限制是 20 个表，现在支持配置更大的数量
+        max_tables = getattr(self, "_max_tables_limit", 100)  # 默认 100 个表
+        if len(requested) > max_tables:
+            raise ValueError(f"一次最多选择 {max_tables} 张 SQL 分析表")
+        # === CUSTOM MODIFICATION END ===
+        
         self._analysis_tables = set(requested)
         return [name for name in catalog if name in self._analysis_tables]
 
