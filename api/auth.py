@@ -63,7 +63,22 @@ SECRET_KEY = get_or_create_secret_key()
 
 
 def is_cloud_managed() -> bool:
+    """判断是否为云端托管环境（Railway/Vercel）"""
     return bool(os.environ.get("RAILWAY_PROJECT_ID")) or os.environ.get("VERCEL") == "1"
+
+
+def is_auth_enabled() -> bool:
+    """判断是否启用认证系统（登录/用户隔离）
+    
+    适用场景：
+    - BAA_ENABLE_AUTH=1: 本地企业多用户部署
+    - RAILWAY_PROJECT_ID 或 VERCEL=1: 云端部署（自动启用）
+    """
+    # 显式启用认证（适用于本地企业部署）
+    if os.environ.get("BAA_ENABLE_AUTH") == "1":
+        return True
+    # 云端环境自动启用（向后兼容）
+    return is_cloud_managed()
 
 
 def current_user() -> dict | None:
@@ -113,13 +128,13 @@ def _agreement_ctx() -> dict:
 
 @bp.get("/login")
 def login_page():
-    """Serve the login page (cloud-only). Redirect to app if already authed."""
-    if not is_cloud_managed():
+    """Serve the login page (when auth is enabled). Redirect to app if already authed."""
+    if not is_auth_enabled():
         return ("", 403)
     if current_user():
         return render_template("agent_chat.html",
                               desktop_lifecycle_enabled=False,
-                              is_cloud_managed=True)
+                              is_cloud_managed=is_auth_enabled())
     return render_template("login.html", quota_limit=DAILY_TOKEN_LIMIT, **_agreement_ctx())
 
 
@@ -129,25 +144,8 @@ def login_page():
 
 @bp.post("/api/auth/send-code")
 def send_verification_code():
-    data = request.get_json(silent=True) or {}
-    email = (data.get("email") or "").strip().lower()
-    if not email or "@" not in email:
-        return jsonify({"error": "请输入有效邮箱"}), 400
-
-    if not can_resend(email):
-        return jsonify({"error": "发送太频繁，请 60 秒后再试"}), 429
-
-    if not _smtp_configured():
-        return jsonify({"error": "邮件服务未配置，请联系管理员"}), 503
-
-    code = generate_code()
-    store_email_code(email, code)
-
-    ok = _send_email_code(email, code)
-    if not ok:
-        return jsonify({"error": "验证码发送失败，请稍后重试"}), 500
-
-    return jsonify({"ok": True, "message": "验证码已发送至邮箱"})
+    """发送验证码 - 企业部署模式已禁用"""
+    return jsonify({"error": "企业部署模式不支持自助注册，请联系管理员创建账号"}), 403
 
 
 # ---------------------------------------------------------------------------
@@ -156,6 +154,13 @@ def send_verification_code():
 
 @bp.post("/api/auth/register")
 def register():
+    """用户注册 - 企业部署模式已禁用"""
+    # 企业部署模式：禁用自助注册，由管理员统一创建账号
+    from .auth import is_cloud_managed
+    if not is_cloud_managed():
+        return jsonify({"error": "企业部署模式不支持自助注册，请联系管理员创建账号"}), 403
+    
+    # 云端模式保留原有注册逻辑
     data = request.get_json(silent=True) or {}
     email = (data.get("email") or "").strip().lower()
     code = (data.get("code") or "").strip()
@@ -190,11 +195,11 @@ def login():
     password = data.get("password") or ""
 
     if not email or not password:
-        return jsonify({"error": "请输入邮箱和密码"}), 400
+        return jsonify({"error": "请输入账号和密码"}), 400
 
     user = verify_user(email, password)
     if not user:
-        return jsonify({"error": "邮箱或密码错误"}), 401
+        return jsonify({"error": "账号或密码错误"}), 401
 
     session["uid"] = user["id"]
     return jsonify({"ok": True, "user": {"id": user["id"], "email": user["email"]}})
@@ -217,3 +222,122 @@ def me():
         "user": {"id": user["id"], "email": user["email"]},
         "quota": quota,
     })
+
+
+# ---------------------------------------------------------------------------
+#  管理员 API（本地企业部署）
+# ---------------------------------------------------------------------------
+
+def _is_admin() -> bool:
+    """判断当前用户是否为管理员
+    
+    策略：
+    1. 检查环境变量 BAA_ADMIN_EMAILS（逗号分隔的管理员邮箱列表）
+    2. 如果未配置，第一个注册的用户自动成为管理员
+    """
+    user = current_user()
+    if not user:
+        return False
+    
+    # 方式1：环境变量指定管理员
+    admin_emails = os.environ.get("BAA_ADMIN_EMAILS", "").lower().split(",")
+    admin_emails = [e.strip() for e in admin_emails if e.strip()]
+    if admin_emails and user["email"].lower() in admin_emails:
+        return True
+    
+    # 方式2：第一个用户自动成为管理员
+    from data.auth_store import admin_list_users
+    users = admin_list_users(limit=1)
+    if users and users[0]["email"] == user["email"]:
+        return True
+    
+    return False
+
+
+@bp.post("/api/admin/users")
+def admin_create_user_endpoint():
+    """管理员创建用户"""
+    if not is_auth_enabled():
+        return jsonify({"error": "认证未启用"}), 403
+    
+    if not _is_admin():
+        return jsonify({"error": "需要管理员权限"}), 403
+    
+    data = request.get_json(silent=True) or {}
+    email = (data.get("email") or "").strip().lower()
+    password = data.get("password") or ""
+    
+    if not email:
+        return jsonify({"error": "请输入账号"}), 400
+    if len(password) < 4:
+        return jsonify({"error": "密码至少 4 个字符"}), 400
+    
+    from data.auth_store import admin_create_user
+    current = current_user()
+    user = admin_create_user(email, password, created_by=current["email"] if current else "system")
+    
+    if not user:
+        return jsonify({"error": "该邮箱已注册"}), 409
+    
+    return jsonify({"ok": True, "user": {"id": user["id"], "email": user["email"]}})
+
+
+@bp.get("/api/admin/users")
+def admin_list_users_endpoint():
+    """管理员查看用户列表"""
+    if not is_auth_enabled():
+        return jsonify({"error": "认证未启用"}), 403
+    
+    if not _is_admin():
+        return jsonify({"error": "需要管理员权限"}), 403
+    
+    from data.auth_store import admin_list_users
+    users = admin_list_users(limit=500)
+    return jsonify({"ok": True, "users": users})
+
+
+@bp.delete("/api/admin/users/<email>")
+def admin_delete_user_endpoint(email: str):
+    """管理员删除用户"""
+    if not is_auth_enabled():
+        return jsonify({"error": "认证未启用"}), 403
+    
+    if not _is_admin():
+        return jsonify({"error": "需要管理员权限"}), 403
+    
+    from data.auth_store import admin_delete_user
+    if admin_delete_user(email):
+        return jsonify({"ok": True, "message": f"用户 {email} 已删除"})
+    else:
+        return jsonify({"error": "用户不存在"}), 404
+
+
+@bp.post("/api/admin/users/<email>/reset-password")
+def admin_reset_password_endpoint(email: str):
+    """管理员重置用户密码"""
+    if not is_auth_enabled():
+        return jsonify({"error": "认证未启用"}), 403
+    
+    if not _is_admin():
+        return jsonify({"error": "需要管理员权限"}), 403
+    
+    data = request.get_json(silent=True) or {}
+    new_password = data.get("password") or ""
+    
+    if len(new_password) < 4:
+        return jsonify({"error": "密码至少 4 个字符"}), 400
+    
+    from data.auth_store import admin_reset_password
+    if admin_reset_password(email, new_password):
+        return jsonify({"ok": True, "message": f"用户 {email} 密码已重置"})
+    else:
+        return jsonify({"error": "用户不存在"}), 404
+
+
+@bp.get("/api/admin/check")
+def admin_check():
+    """检查当前用户是否为管理员"""
+    if not is_auth_enabled():
+        return jsonify({"is_admin": False, "auth_enabled": False})
+    
+    return jsonify({"is_admin": _is_admin(), "auth_enabled": True})

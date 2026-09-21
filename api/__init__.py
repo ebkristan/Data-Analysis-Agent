@@ -43,7 +43,7 @@ def create_app() -> Flask:
         template_folder=str(resource_path("templates")),
         static_folder=str(resource_path("static")),
     )
-    from .auth import SECRET_KEY as _AUTH_SECRET, is_cloud_managed as _is_cloud
+    from .auth import SECRET_KEY as _AUTH_SECRET, is_auth_enabled as _is_auth
     app.secret_key = _AUTH_SECRET
     local_origins = [
         r"http://localhost(?::\d+)?",
@@ -139,8 +139,8 @@ def create_app() -> Flask:
 
     @app.before_request
     def cloud_auth_guard():
-        """In cloud mode, require authentication for API routes."""
-        if not _is_cloud():
+        """When auth is enabled, require authentication for API routes."""
+        if not _is_auth():
             return None
         path = request.path
         # Exempt auth endpoints, health check, static files, and the login page
@@ -158,16 +158,22 @@ def create_app() -> Flask:
 
     @app.get("/")
     def index():
-        cloud = _is_cloud()
-        if cloud:
+        auth_enabled = _is_auth()
+        if auth_enabled:
             from .auth import current_user
             if not current_user():
                 from .auth import _agreement_ctx
                 return render_template("login.html", quota_limit=__import__("data.auth_store", fromlist=["DAILY_TOKEN_LIMIT"]).DAILY_TOKEN_LIMIT, **_agreement_ctx())
+        
+        # 传递认证状态给模板
+        # is_cloud_managed: 控制云端提示（仅真实云端环境显示）
+        # auth_enabled: 控制退出按钮等需要认证的 UI 元素
+        from .auth import is_cloud_managed
         resp = render_template(
             "agent_chat.html",
             desktop_lifecycle_enabled=os.environ.get("BAA_DESKTOP_LIFECYCLE") == "1",
-            is_cloud_managed=cloud,
+            is_cloud_managed=is_cloud_managed(),  # 仅在 Railway/Vercel 显示云端提示
+            auth_enabled=auth_enabled,  # 启用认证后显示退出按钮等
         )
         from flask import make_response
         resp = make_response(resp)

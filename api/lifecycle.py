@@ -42,13 +42,13 @@ def _check_auth():
 
 
 def _require_cloud_auth():
-    """Require an authenticated user in cloud-managed deployments.
+    """Require an authenticated user when auth is enabled.
 
-    In desktop mode (no cloud env) this is a no-op so local users can still
+    When auth is disabled, this is a no-op so local users can still
     manage their own storage without a login step.
     """
-    from .auth import is_cloud_managed, current_user
-    if not is_cloud_managed():
+    from .auth import is_auth_enabled, current_user
+    if not is_auth_enabled():
         return  # desktop — no auth required
     user = current_user()
     if not user:

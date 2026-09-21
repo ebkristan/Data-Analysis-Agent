@@ -503,6 +503,28 @@ operation succeeded without a successful tool result."""
 
 DATA_RULES = """## Data analysis rules
 
+Semantic Layer Reports (优先使用):
+- A semantic layer report system is available that provides pre-defined SQL templates for
+common business queries. When matched, you will receive a semantic_report_match object
+containing: dimension (业务维度), report (报表名称), pre-generated SQL, field definitions
+and filters applied.
+- When semantic_report_match exists in context: 
+  * The provided SQL is a TEMPLATE that may contain placeholder {WHERE_CLAUSE}
+  * System has attempted to extract filter values (e.g., org_name, person_name) from the question
+  * BUT these extracted values may be incomplete or inaccurate
+  * YOU MUST review the user's question and the where_conditions definition, then:
+    - If the auto-extracted filters are correct: use the SQL as-is
+    - If filters are missing or wrong: construct proper WHERE clause based on user intent
+    - Example: Question "OA项目组的人员" should filter by org_name='OA项目组', even if
+      the system extracted something else
+  * The SQL template already includes cross-database JOINs - DO NOT rewrite the FROM/JOIN部分
+- Example workflow: User asks "查询OA项目组的人员信息" → System matches [人力资源→人员信息查询]
+→ You receive SQL template with where_conditions → You verify "OA项目组" should be in WHERE
+→ Adjust SQL if needed → Execute with query_data → Analyze results.
+- The semantic layer covers: 人力资源 (人员/考勤/请假), 财务管理 (客户/项目/合同), 办公管理 (会议/公告).
+- If no semantic match (semantic_report_match absent): fall back to normal schema
+exploration and keyword-based table selection below.
+
 Accuracy guardrails:
 - Before creating a derived analysis table from a new/raw table, call profile_data or run
   equivalent quality SQL when key filters depend on missing values, dates, ids or labels.

@@ -34,8 +34,10 @@ _BASE_WAREHOUSE_DIR.mkdir(parents=True, exist_ok=True)
 _BASE_SESSION_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def _is_cloud() -> bool:
-    return bool(os.environ.get("RAILWAY_PROJECT_ID")) or os.environ.get("VERCEL") == "1"
+def _is_auth_enabled() -> bool:
+    """判断是否启用认证（用于数据隔离）"""
+    from api.auth import is_auth_enabled
+    return is_auth_enabled()
 
 
 def _scoped_dir(base: Path, user_id: str) -> Path:
@@ -51,8 +53,8 @@ def _scoped_dir(base: Path, user_id: str) -> Path:
 
 
 def _resolve_user_id() -> str:
-    """Return the current authenticated user ID in cloud mode, empty otherwise."""
-    if not _is_cloud():
+    """Return the current authenticated user ID when auth is enabled, empty otherwise."""
+    if not _is_auth_enabled():
         return ""
     from .auth import current_user
     auth_user = current_user()

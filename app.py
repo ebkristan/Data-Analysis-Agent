@@ -15,6 +15,20 @@ import sys
 if getattr(sys, "frozen", False):
     multiprocessing.freeze_support()
 
+# 加载 .env 配置文件（开发环境）
+# 需要在导入其他模块之前加载环境变量
+try:
+    from dotenv import load_dotenv
+    env_file = Path(__file__).parent / ".env"
+    if env_file.exists():
+        load_dotenv(env_file)
+        log.info(f"[app] Loaded environment variables from {env_file}")
+except ImportError:
+    # python-dotenv 未安装，跳过（生产环境通常直接设置环境变量）
+    log.warning("[app] python-dotenv not installed, skipping .env loading")
+except Exception as e:
+    log.warning(f"[app] Failed to load .env: {e}")
+
 # -------------------------------
 # 自动检测并安装缺失依赖（仅本地环境）
 # -------------------------------

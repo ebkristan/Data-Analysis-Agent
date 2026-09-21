@@ -664,8 +664,10 @@ def _smart_select_tables_from_question(sess, question: str):
     
     === CUSTOM MODIFICATION - 多数据源智能路由机制 ===
     改进逻辑：
-    1. 遍历所有数据源，计算每个数据源的匹配分数
-    2. 为所有匹配的数据源设置表（支持跨库查询）
+    1. 优先使用语义层报表系统（精确、跨库JOIN预定义）
+    2. 如果报表匹配失败，降级到关键词映射方式
+    3. 遍历所有数据源，计算每个数据源的匹配分数
+    4. 为所有匹配的数据源设置表（支持跨库查询）
     """
     import re
     from data.sources.sql import SQLDataSource
@@ -674,6 +676,161 @@ def _smart_select_tables_from_question(sess, question: str):
     log.info("[SMART-SELECT] Starting smart table selection")
     log.info("[SMART-SELECT] Question: %s", question[:200])
     log.info("=" * 60)
+    
+    # ===== 新增：语义层报表匹配 =====
+    try:
+        from data.semantic_layer import match_semantic_report
+        
+        semantic_result = match_semantic_report(question)
+        
+        if semantic_result and semantic_result.get("confidence", 0) >= 0.2:
+            # 语义层匹配成功
+            log.info("[SEMANTIC-LAYER] ✅ Matched semantic report with confidence %.2f", 
+                    semantic_result["confidence"])
+            log.info("[SEMANTIC-LAYER]   Dimension: %s", semantic_result["dimension"]["name"])
+            log.info("[SEMANTIC-LAYER]   Report: %s", semantic_result["report"]["name"])
+            log.info("[SEMANTIC-LAYER]   Databases: %s", semantic_result.get("databases", []))
+            
+            # 将语义层结果存储到会话，供Agent使用
+            sess._semantic_report_match = semantic_result
+            
+            # ===== 关键优化：根据语义层报表自动勾选需要的表 =====
+            # 从SQL模板中提取实际使用的表名
+            sql_template = semantic_result.get("sql", "")
+            required_databases = semantic_result.get("databases", [])
+            
+            # 提取SQL中的表名 (FROM/JOIN 后面的表名)
+            import re
+            # 匹配 FROM table_name 或 JOIN table_name
+            table_pattern = r'(?:FROM|JOIN)\s+(\w+)\.(\w+)'
+            matches = re.findall(table_pattern, sql_template, re.IGNORECASE)
+            
+            # 按数据库分组: {database: [table1, table2, ...]}
+            db_tables = {}
+            for db, table in matches:
+                db = db.lower()
+                if db not in db_tables:
+                    db_tables[db] = set()
+                db_tables[db].add(table)
+            
+            log.info("[SEMANTIC-LAYER] Extracted tables from SQL: %s", db_tables)
+            
+            # 为每个涉及的数据库自动勾选表
+            all_entries = list(sess._active_entries()) if hasattr(sess, "_active_entries") else []
+            tables_selected = False
+            
+            for entry in all_entries:
+                src = entry.get("source")
+                if not isinstance(src, SQLDataSource):
+                    continue
+                
+                source_name = getattr(src, "name", "SQL")
+                
+                # 尝试匹配数据库名称
+                # 支持: "HR", "hr", "人力资源数据库", "OA系统" 等各种命名
+                matched_db = None
+                for db in required_databases:
+                    db_lower = db.lower()
+                    source_name_lower = source_name.lower()
+                    
+                    # 策略1: 精确匹配
+                    if db_lower == source_name_lower:
+                        matched_db = db.lower()
+                        break
+                    
+                    # 策略2: 数据源名称包含数据库名 (如: "人力资源数据库" 包含 "hr" 的中文)
+                    if db_lower in source_name_lower:
+                        matched_db = db.lower()
+                        break
+                    
+                    # 策略3: 数据源名称以数据库名开头 (如: "HR系统")
+                    if source_name_lower.startswith(db_lower):
+                        matched_db = db.lower()
+                        break
+                    
+                    # 策略4: 中文关键词映射 (处理 "人力资源" → "hr" 这种情况)
+                    db_cn_keywords = {
+                        'hr': ['人力', '人资', '员工'],
+                        'oa': ['办公', '协同'],
+                        'crm': ['客户', '销售'],
+                        'finance': ['财务', '会计'],
+                        'pm': ['项目']
+                    }
+                    
+                    if db_lower in db_cn_keywords:
+                        for keyword in db_cn_keywords[db_lower]:
+                            if keyword in source_name_lower:
+                                matched_db = db.lower()
+                                break
+                        if matched_db:
+                            break
+                
+                if not matched_db:
+                    log.debug("[SEMANTIC-LAYER] Source '%s' does not match required databases %s", 
+                             source_name, required_databases)
+                    continue
+                
+                # 获取该数据库需要的表
+                required_tables = db_tables.get(matched_db, set())
+                if not required_tables:
+                    log.debug("[SEMANTIC-LAYER] No tables required for database '%s'", matched_db)
+                    continue
+                
+                log.info("[SEMANTIC-LAYER] Source '%s' matches database '%s', required tables: %s", 
+                        source_name, matched_db, required_tables)
+                
+                # 获取数据源中实际存在的表
+                try:
+                    available_tables = src._all_table_names()
+                except Exception as exc:
+                    log.warning("[SEMANTIC-LAYER] Failed to get tables for '%s': %s", source_name, exc)
+                    continue
+                
+                # 筛选出实际存在的表
+                tables_to_select = []
+                for table in required_tables:
+                    # 大小写不敏感匹配
+                    matched_table = None
+                    for avail_table in available_tables:
+                        if avail_table.lower() == table.lower():
+                            matched_table = avail_table
+                            break
+                    
+                    if matched_table:
+                        tables_to_select.append(matched_table)
+                    else:
+                        log.warning("[SEMANTIC-LAYER] Table '%s' not found in source '%s'", 
+                                  table, source_name)
+                
+                if tables_to_select:
+                    log.info("[SEMANTIC-LAYER] Selecting %d tables for source '%s': %s", 
+                            len(tables_to_select), source_name, tables_to_select)
+                    
+                    try:
+                        src.set_analysis_tables(tables_to_select)
+                        tables_selected = True
+                        log.info("[SEMANTIC-LAYER] ✓ Successfully selected tables for '%s'", source_name)
+                    except Exception as exc:
+                        log.error("[SEMANTIC-LAYER] Failed to set tables for '%s': %s", source_name, exc)
+            
+            if tables_selected:
+                log.info("[SEMANTIC-LAYER] ✓ Auto-selected tables based on semantic report")
+            else:
+                log.warning("[SEMANTIC-LAYER] ⚠️ No tables were auto-selected, user may need to select manually")
+            
+            # 完成语义层处理，不再执行关键词匹配
+            return
+        else:
+            if semantic_result:
+                log.info("[SEMANTIC-LAYER] ⚠️ Semantic match confidence too low (%.2f < 0.2), falling back to keyword mapping", 
+                        semantic_result.get("confidence", 0))
+            else:
+                log.info("[SEMANTIC-LAYER] ℹ️ No semantic report matched, falling back to keyword mapping")
+    except Exception as e:
+        log.warning("[SEMANTIC-LAYER] Failed to match semantic report: %s, falling back to keyword mapping", e)
+        import traceback
+        log.debug("[SEMANTIC-LAYER] Traceback: %s", traceback.format_exc())
+    # ===== 语义层报表匹配结束 =====
     
     changed = False
     
@@ -859,38 +1016,70 @@ def _smart_select_tables_from_question(sess, question: str):
             log.info("[SMART-SELECT] Source '%s': default_tables=%s + matched_tables=%s",
                     best_source_name, default_tables, list(matched_tables)[:5])
         else:
+            # === CUSTOM MODIFICATION - 强制设置默认表，清除之前的选择 ===
             # 无关键词匹配：只用默认表
-            tables_to_set = set(default_tables)
+            # 即使 default_tables 为空，也要设置，这会清除之前问题留下的表选择
+            tables_to_set = set(default_tables) if default_tables else set()
             if tables_to_set:
                 log.info("[SMART-SELECT] Source '%s': using default_tables only: %s",
                         best_source_name, list(tables_to_set))
+            else:
+                log.info("[SMART-SELECT] Source '%s': no defaults, will clear previous selection",
+                        best_source_name)
+            # === CUSTOM MODIFICATION END ===
         
-        if tables_to_set:
-            try:
-                # 验证表是否存在
-                all_tables = best_source._all_table_names()
-                valid_tables = [t for t in tables_to_set if t in all_tables]
-                
-                if valid_tables:
-                    best_source.set_analysis_tables(valid_tables)
-                    changed = True
-                    
-                    if candidate in matched_sources:
-                        log.info("[SMART-SELECT] ✅ Set tables for '%s' (score=%d, default=%d + matched=%d) → %s",
-                                best_source_name, candidate["score"], 
-                                len(default_tables), len(matched_tables), valid_tables)
-                    else:
-                        log.info("[SMART-SELECT] ✅ Set default tables for '%s': %s (no keyword match)",
-                                best_source_name, valid_tables)
+        # === CUSTOM MODIFICATION - 始终调用 set_analysis_tables，包括清空操作 ===
+        try:
+            # 验证表是否存在
+            all_tables = best_source._all_table_names()
+            valid_tables = [t for t in tables_to_set if t in all_tables]
+            
+            # 关键改动：即使 valid_tables 为空列表，也要调用
+            # 这会清除之前问题留下的表选择，避免上下文污染
+            best_source.set_analysis_tables(valid_tables)
+            changed = True
+            
+            if valid_tables:
+                if candidate in matched_sources:
+                    log.info("[SMART-SELECT] ✅ Set tables for '%s' (score=%d, default=%d + matched=%d) → %s",
+                            best_source_name, candidate["score"], 
+                            len(default_tables), len(matched_tables), valid_tables)
                 else:
-                    log.warning("[SMART-SELECT] No valid tables found for '%s', requested: %s, available: %s",
-                               best_source_name, list(tables_to_set), all_tables[:10])
-            except Exception as exc:
-                log.warning("[SMART-SELECT] Failed to set tables for '%s': %s",
-                           best_source_name, exc)
-        else:
-            log.debug("[SMART-SELECT] No tables to set for '%s' (no default_tables configured)",
-                     best_source_name)
+                    log.info("[SMART-SELECT] ✅ Set default tables for '%s': %s (no keyword match)",
+                            best_source_name, valid_tables)
+            else:
+                # 新增：明确记录清空操作，帮助诊断上下文污染问题
+                log.info("[SMART-SELECT] ✅ Cleared tables for '%s' (no match, no defaults configured)",
+                        best_source_name)
+        except Exception as exc:
+            log.warning("[SMART-SELECT] Failed to set tables for '%s': %s",
+                       best_source_name, exc)
+        # === CUSTOM MODIFICATION END ===
+    # === CUSTOM MODIFICATION END ===
+    
+    # === CUSTOM MODIFICATION - 清空完全未参与匹配的数据源 ===
+    # 收集所有参与候选的数据源名称
+    candidate_source_names = {c["source_name"] for c in candidates}
+    
+    for entry in all_entries:
+        src = entry.get("source")
+        if not isinstance(src, SQLDataSource):
+            continue
+        
+        source_name = getattr(src, "name", "SQL")
+        auto_select_enabled = getattr(src, "_auto_select_enabled", False)
+        
+        # 如果这个数据源：
+        # 1. 启用了智能表选择
+        # 2. 但完全没有出现在候选列表中（可能是配置问题或被跳过）
+        # 那么清空其表选择，避免使用旧的表（上下文污染）
+        if auto_select_enabled and source_name not in candidate_source_names:
+            current_tables = src.get_analysis_tables()
+            if current_tables:
+                log.warning("[SMART-SELECT] Source '%s' enabled but not in candidates (auto_select=%s), clearing %d old tables to prevent context pollution: %s",
+                           source_name, auto_select_enabled, len(current_tables), current_tables[:5])
+                src.set_analysis_tables([])
+                changed = True
     # === CUSTOM MODIFICATION END ===
     
     # 如果有改变，清除缓存
@@ -1025,7 +1214,8 @@ def _build_agent(
 @bp.post("/api/session/new")
 def new_session():
     owner_user_id = ""
-    if bool(os.environ.get("RAILWAY_PROJECT_ID")) or os.environ.get("VERCEL") == "1":
+    from .auth import is_auth_enabled
+    if is_auth_enabled():
         from .auth import current_user
         auth_user = current_user()
         if auth_user:
@@ -1285,8 +1475,9 @@ def chat_stream(sid: str):
         or d.get("user_id")
         or "local-default"
     ).strip()[:200]
-    # Cloud mode: use authenticated user and enforce token quota
-    if bool(os.environ.get("RAILWAY_PROJECT_ID")) or os.environ.get("VERCEL") == "1":
+    # When auth is enabled: use authenticated user and enforce token quota
+    from .auth import is_auth_enabled
+    if is_auth_enabled():
         from .auth import current_user
         from data.auth_store import check_quota
         auth_user = current_user()
@@ -1762,8 +1953,9 @@ def chat_stream(sid: str):
                         cached_input_tokens=event.get("cached_input_tokens", 0),
                         cache_write_tokens=event.get("cache_write_tokens", 0),
                     )
-                    # Cloud mode: record per-user daily token usage
-                    if bool(os.environ.get("RAILWAY_PROJECT_ID")) or os.environ.get("VERCEL") == "1":
+                    # When auth is enabled: record per-user daily token usage
+                    from api.auth import is_auth_enabled, is_cloud_managed
+                    if is_auth_enabled() and (is_cloud_managed() or os.environ.get("BAA_ENABLE_QUOTA") == "1"):
                         from data.auth_store import add_usage
                         _total = (event.get("prompt_tokens", 0) or 0) + (event.get("completion_tokens", 0) or 0)
                         if _total > 0:

@@ -1674,7 +1674,75 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
             }]
 
         _system_msg = {"role": "system", "content": system}
-        _user_msg = {"role": "user", "content": user_message}
+        
+        # ===== 注入语义层报表信息 =====
+        semantic_context = ""
+        try:
+            # 从全局session_manager获取会话
+            from api.state import session_manager
+            sess = session_manager.get(self._session_id)
+            
+            if not sess:
+                log.warning("[agent] Session not found: %s", self._session_id)
+            else:
+                log.info("[agent] Attempting to load semantic report match from session %s", self._session_id)
+                
+                # 尝试从会话中获取语义层匹配结果
+                semantic_result = getattr(sess, "_semantic_report_match", None)
+                
+                if semantic_result:
+                    log.info("[agent] Found semantic_result in session: matched=%s", semantic_result.get("matched"))
+                else:
+                    log.info("[agent] No semantic_result found in session")
+                
+                if semantic_result and semantic_result.get("matched"):
+                    # 构建语义层上下文信息
+                    dimension = semantic_result.get("dimension", {})
+                    report = semantic_result.get("report", {})
+                    sql = semantic_result.get("sql", "")
+                    fields = semantic_result.get("fields", [])
+                    databases = semantic_result.get("databases", [])
+                    filters_applied = semantic_result.get("filters_applied", {})
+                    where_conditions = report.get("where_conditions", {})
+                    
+                    semantic_context = f"""
+
+[语义层报表匹配结果]
+已为您的问题匹配到预定义报表，无需手动查找表结构：
+
+维度: {dimension.get("name", "")} {dimension.get("icon", "")}
+报表: {report.get("name", "")}
+描述: {report.get("description", "")}
+涉及数据库: {", ".join(databases)}
+可用字段: {", ".join(fields)}
+
+预生成的SQL模板:
+```sql
+{sql}
+```
+
+WHERE条件定义:
+{chr(10).join(f"- {k}: {v}" for k, v in where_conditions.items())}
+
+系统尝试提取的过滤条件:
+{chr(10).join(f"- {k} = '{v}'" for k, v in filters_applied.items()) if filters_applied else "- 未提取到过滤条件"}
+
+重要提示:
+1. 使用上述SQL模板,它已包含正确的跨库JOIN
+2. 检查用户问题,验证过滤条件是否正确
+3. 如果过滤条件不准确,根据用户问题调整WHERE子句
+4. 不要调用get_schema,直接使用提供的SQL
+5. 使用query_data执行SQL并分析结果
+
+"""
+                    log.info("[agent] ✓ Injected semantic layer context for report: %s", report.get("name"))
+        except Exception as e:
+            log.warning("[agent] Failed to inject semantic layer context: %s", e)
+            import traceback
+            log.debug("[agent] Traceback: %s", traceback.format_exc())
+        # ===== 语义层注入结束 =====
+        
+        _user_msg = {"role": "user", "content": semantic_context + user_message}
         _ctx_window = self._get_context_window()
         _turn_safety_margin = adaptive_safety_margin(self._compaction_state)
 
@@ -1858,7 +1926,9 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
         _tool_call_history: list[tuple[str, str]] = []  # (tool_name, args_hash)
         _MAX_IDENTICAL_CALLS = 10  # 最多允许相同的工具调用重复次数
         _MAX_METADATA_CALLS = 10  # 元数据查询允许的重复次数（探索性查询）
-        _MAX_READ_RESULT_CALLS = 10  # read_tool_result允许的重复次数（读取artifact）
+        # === CUSTOM MODIFICATION - 降低read_tool_result阈值，快速失败 ===
+        _MAX_READ_RESULT_CALLS = 3  # read_tool_result允许的重复次数（从10降低到3）
+        # 原因：read_tool_result失败通常是artifact_id无效，重试无意义，应快速失败并提示Agent使用其他方法
         _recent_tool_window = 15  # 在最近N次调用中检测循环
         
         # 新增：SQL错误检测
@@ -2808,19 +2878,20 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
                 
                 if _loop_detected:
                     # 发现循环，强制停止并给出提示
-                    # === CUSTOM MODIFICATION - 添加read_tool_result循环提示 ===
+                    # === CUSTOM MODIFICATION - 优化read_tool_result循环提示 ===
                     if is_read_result:
                         loop_message = (
-                            "⚠️ 检测到反复读取同一结果的循环\n\n"
-                            f"Agent 已尝试读取同一个 artifact 结果 {_MAX_READ_RESULT_CALLS} 次但未取得进展。\n\n"
+                            "⚠️ 检测到反复读取工具结果失败\n\n"
+                            f"Agent 已尝试使用 read_tool_result 读取结果 {threshold} 次但均失败。\n\n"
                             "**可能的原因：**\n"
-                            "1. 查询结果为空或格式不符合预期\n"
-                            "2. Agent 对结果的解析逻辑有误\n"
-                            "3. 缺少必要的上下文信息\n\n"
+                            "1. 查询结果未生成有效的 artifact_id\n"
+                            "2. artifact 不属于当前 session 或已过期\n"
+                            "3. 查询结果已在上方显示，无需再次读取\n\n"
                             "**建议：**\n"
-                            "• 换一种方式提问或简化问题\n"
-                            "• 检查之前的查询是否返回了有效数据\n"
-                            "• 尝试先查看数据表结构"
+                            "• 直接使用上方显示的查询结果预览\n"
+                            "• 如需完整数据，重新执行 query_data\n"
+                            "• 如果记录过多，使用 LIMIT 限制返回数量\n\n"
+                            "提示：上方的查询结果预览通常已包含所需信息，请仔细查看。"
                         )
                     elif _is_metadata_loop:
                         loop_message = (

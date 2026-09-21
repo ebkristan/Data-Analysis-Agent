@@ -435,9 +435,10 @@ class ChatSession:
 
     # Maximum characters kept per tool result in history.
     # Large query results are truncated here so they don't bloat the prompt on
-    # subsequent turns.  800 chars ≈ 230 tokens — enough for the Agent to know
-    # what was queried and what the key values were.
-    _TOOL_RESULT_HISTORY_CAP = 800
+    # subsequent turns.  3000 chars ≈ 850 tokens — enough for the Agent to see
+    # 10-20 records in typical queries (meetings, users, etc.) without truncation.
+    # === CUSTOM MODIFICATION - 增加截断阈值以减少read_tool_result循环 ===
+    _TOOL_RESULT_HISTORY_CAP = 3000  # 从800提高到3000，支持更多记录完整显示
 
     def add_tool_messages(self, messages: list) -> None:
         """Store tool call / tool result messages from one agent turn.

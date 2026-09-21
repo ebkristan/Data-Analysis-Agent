@@ -6,7 +6,7 @@
 <title>小垒Agent</title>
 <link rel="icon" href="{{ url_for('static', filename='Images/icon.png') }}">
 <script src="{{ url_for('static', filename='js/theme_bootstrap.js', v='fe0') }}"></script>
-<link rel="stylesheet" href="{{ url_for('static', filename='css/agent_chat.css', v='v1.3.0') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/agent_chat.css', v='v1.3.2') }}">
 {% if desktop_lifecycle_enabled %}
 <script defer src="{{ url_for('static', filename='js/modules/desktop_lifecycle.js', v='desktop-lease-1') }}"></script>
 {% endif %}
@@ -93,6 +93,9 @@
       </section>
 
       <nav class="sb-nav" aria-label="Agent navigation">
+        <button class="sb-nav-item sb-nav-item-new-chat" data-action="newChat" title="开始新对话">
+          <span class="sb-nav-icon"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></span><span class="sb-nav-label" data-i18n="sidebar.new_chat">新对话</span>
+        </button>
         <button class="sb-nav-item active" data-sidebar-nav="agent" data-action="setSidebarNav:agent">
           <span class="sb-nav-icon"><svg viewBox="0 0 24 24"><path d="M12 3L4 14h7l-1 7 8-11h-7l1-7z"/></svg></span><span class="sb-nav-label" data-i18n="sidebar.agent_mode">Agent 模式</span>
         </button>
@@ -564,7 +567,9 @@
   <!-- ── Main ───────────────────────────────────────────────────── -->
   <div class="main">
     {% if is_cloud_managed %}
-    <div class="cloud-banner" id="cloudBanner">
+    <!-- 企业本地部署 - 云端提示已禁用 -->
+    <!-- 原云端演示环境提示条已移除，仅在真正的云端环境（Railway/Vercel）显示 -->
+    <div class="cloud-banner" id="cloudBanner" style="display: none;">
       <span class="cloud-banner-icon">⚠️</span>
       <div class="cloud-banner-text">
         <strong>云端演示环境免责声明：</strong>请勿上传敏感数据或商业机密，对话数据存储于公共服务器。<strong>使用完毕后请删除会话</strong>（侧边栏 → 已保存对话 → 删除），以免数据泄露。
@@ -585,7 +590,7 @@
         <button class="hdr-btn" id="btn-job-history" data-action="openJobHistory"
                 data-i18n="job.history.title">任务历史</button>
 <!--        <button class="hdr-btn" id="btn-schema" data-action="openSchemaView" data-i18n="header.schema"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" class="icon-inline" xmlns="http://www.w3.org/2000/svg"><rect x="1" y="3" width="14" height="2.5" rx="1" fill="currentColor"/><rect x="1" y="7" width="14" height="2.5" rx="1" fill="currentColor" opacity=".7"/><rect x="1" y="11" width="9" height="2.5" rx="1" fill="currentColor" opacity=".45"/></svg>数据预览</button>-->
-        {% if is_cloud_managed %}
+        {% if is_cloud_managed or auth_enabled %}
         <button class="hdr-btn" id="cloud-logout" data-action="cloudLogout" title="退出登录" style="color:#f87171"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>退出</button>
         {% endif %}
       </div>

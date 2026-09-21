@@ -245,3 +245,117 @@ def check_quota(uid: str) -> dict:
         "remaining": remaining,
         "exceeded": used >= DAILY_TOKEN_LIMIT,
     }
+
+
+# ---------------------------------------------------------------------------
+#  管理员功能（本地企业部署）
+# ---------------------------------------------------------------------------
+
+def admin_create_user(email: str, password: str, created_by: str = "admin") -> dict | None:
+    """管理员直接创建用户（无需邮件验证码）
+    
+    适用场景：企业内部部署，IT 管理员统一创建员工账号
+    
+    Args:
+        email: 用户邮箱
+        password: 初始密码
+        created_by: 创建者标识（用于审计）
+    
+    Returns:
+        用户字典或 None（邮箱已存在）
+    """
+    import logging
+    log = logging.getLogger(__name__)
+    
+    with _LOCK:
+        conn = _get_conn()
+        try:
+            # 检查邮箱是否已存在
+            existing = conn.execute(
+                "SELECT 1 FROM users WHERE email = ?", (email,)
+            ).fetchone()
+            if existing:
+                return None
+            
+            uid = uuid.uuid4().hex
+            conn.execute(
+                "INSERT INTO users (id, email, password_hash) VALUES (?, ?, ?)",
+                (uid, email, generate_password_hash(password)),
+            )
+            conn.commit()
+            
+            log.info(f"[admin] 用户创建成功: {email} (by {created_by})")
+            return {"id": uid, "email": email}
+        finally:
+            conn.close()
+
+
+def admin_list_users(limit: int = 100) -> list[dict]:
+    """管理员查看所有用户列表（按创建时间升序，最早的在前）"""
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT id, email, created_at FROM users ORDER BY created_at ASC LIMIT ?",
+            (limit,)
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def admin_delete_user(email: str) -> bool:
+    """管理员删除用户
+    
+    Returns:
+        True = 删除成功, False = 用户不存在
+    """
+    import logging
+    log = logging.getLogger(__name__)
+    
+    with _LOCK:
+        conn = _get_conn()
+        try:
+            # 获取用户 ID
+            row = conn.execute(
+                "SELECT id FROM users WHERE email = ?", (email,)
+            ).fetchone()
+            if not row:
+                return False
+            
+            uid = row["id"]
+            
+            # 删除用户及其配额记录
+            conn.execute("DELETE FROM users WHERE id = ?", (uid,))
+            conn.execute("DELETE FROM daily_usage WHERE user_id = ?", (uid,))
+            conn.commit()
+            
+            log.info(f"[admin] 用户删除成功: {email}")
+            return True
+        finally:
+            conn.close()
+
+
+def admin_reset_password(email: str, new_password: str) -> bool:
+    """管理员重置用户密码
+    
+    Returns:
+        True = 重置成功, False = 用户不存在
+    """
+    import logging
+    log = logging.getLogger(__name__)
+    
+    with _LOCK:
+        conn = _get_conn()
+        try:
+            result = conn.execute(
+                "UPDATE users SET password_hash = ? WHERE email = ?",
+                (generate_password_hash(new_password), email),
+            )
+            conn.commit()
+            
+            if result.rowcount > 0:
+                log.info(f"[admin] 密码重置成功: {email}")
+                return True
+            return False
+        finally:
+            conn.close()

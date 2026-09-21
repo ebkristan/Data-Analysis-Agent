@@ -23,13 +23,15 @@ SAVE_DIR = data_path("outputs", "Session")
 SAVE_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def _is_cloud() -> bool:
-    return bool(os.environ.get("RAILWAY_PROJECT_ID")) or os.environ.get("VERCEL") == "1"
+def _is_auth_enabled() -> bool:
+    """判断是否启用认证（用于会话隔离）"""
+    from api.auth import is_auth_enabled
+    return is_auth_enabled()
 
 
 def _scoped_save_dir() -> Path:
-    """Return user-scoped session save directory in cloud mode."""
-    if not _is_cloud():
+    """Return user-scoped session save directory when auth is enabled."""
+    if not _is_auth_enabled():
         return SAVE_DIR
     try:
         from api.auth import current_user
